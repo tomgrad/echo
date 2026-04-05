@@ -1,0 +1,6 @@
+numpy
+opencv-python
+pydicom
+pyqtgraph
+PySide6
+scipy
