@@ -47,40 +47,40 @@ class Ui_MainWindow(object):
         self.groupBox.setObjectName(u"groupBox")
         self.gridLayout = QGridLayout(self.groupBox)
         self.gridLayout.setObjectName(u"gridLayout")
+        self.openDicomButton = QPushButton(self.groupBox)
+        self.openDicomButton.setObjectName(u"openDicomButton")
+
+        self.gridLayout.addWidget(self.openDicomButton, 0, 0, 1, 1)
+
         self.loadKeyFramesButton = QPushButton(self.groupBox)
         self.loadKeyFramesButton.setObjectName(u"loadKeyFramesButton")
 
         self.gridLayout.addWidget(self.loadKeyFramesButton, 0, 1, 1, 1)
 
-        self.exportContoursButton = QPushButton(self.groupBox)
-        self.exportContoursButton.setObjectName(u"exportContoursButton")
+        self.checkpointsComboBox = QComboBox(self.groupBox)
+        self.checkpointsComboBox.setObjectName(u"checkpointsComboBox")
 
-        self.gridLayout.addWidget(self.exportContoursButton, 1, 1, 1, 1)
+        self.gridLayout.addWidget(self.checkpointsComboBox, 1, 1, 1, 2)
 
-        self.exportMasksButton = QPushButton(self.groupBox)
-        self.exportMasksButton.setObjectName(u"exportMasksButton")
+        self.engineComboBox = QComboBox(self.groupBox)
+        self.engineComboBox.setObjectName(u"engineComboBox")
 
-        self.gridLayout.addWidget(self.exportMasksButton, 1, 0, 1, 1)
-
-        self.openDicomButton = QPushButton(self.groupBox)
-        self.openDicomButton.setObjectName(u"openDicomButton")
-
-        self.gridLayout.addWidget(self.openDicomButton, 0, 0, 1, 1)
+        self.gridLayout.addWidget(self.engineComboBox, 1, 0, 1, 1)
 
         self.saveKeyFramesButton = QPushButton(self.groupBox)
         self.saveKeyFramesButton.setObjectName(u"saveKeyFramesButton")
 
         self.gridLayout.addWidget(self.saveKeyFramesButton, 0, 2, 1, 1)
 
-        self.checkpointsComboBox = QComboBox(self.groupBox)
-        self.checkpointsComboBox.setObjectName(u"checkpointsComboBox")
+        self.exportMasksButton = QPushButton(self.groupBox)
+        self.exportMasksButton.setObjectName(u"exportMasksButton")
 
-        self.gridLayout.addWidget(self.checkpointsComboBox, 2, 1, 1, 2)
+        self.gridLayout.addWidget(self.exportMasksButton, 2, 0, 1, 1)
 
-        self.engineComboBox = QComboBox(self.groupBox)
-        self.engineComboBox.setObjectName(u"engineComboBox")
+        self.exportContoursButton = QPushButton(self.groupBox)
+        self.exportContoursButton.setObjectName(u"exportContoursButton")
 
-        self.gridLayout.addWidget(self.engineComboBox, 2, 0, 1, 1)
+        self.gridLayout.addWidget(self.exportContoursButton, 2, 1, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox)
@@ -89,6 +89,42 @@ class Ui_MainWindow(object):
         self.groupBox_4.setObjectName(u"groupBox_4")
         self.gridLayout_4 = QGridLayout(self.groupBox_4)
         self.gridLayout_4.setObjectName(u"gridLayout_4")
+        self.hideContoursCheckBox = QCheckBox(self.groupBox_4)
+        self.hideContoursCheckBox.setObjectName(u"hideContoursCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideContoursCheckBox, 3, 0, 1, 1)
+
+        self.hideHistogramCheckBox = QCheckBox(self.groupBox_4)
+        self.hideHistogramCheckBox.setObjectName(u"hideHistogramCheckBox")
+        self.hideHistogramCheckBox.setChecked(True)
+
+        self.gridLayout_4.addWidget(self.hideHistogramCheckBox, 6, 1, 1, 1)
+
+        self.label_3 = QLabel(self.groupBox_4)
+        self.label_3.setObjectName(u"label_3")
+
+        self.gridLayout_4.addWidget(self.label_3, 3, 2, 1, 1)
+
+        self.hidePointsCheckBox = QCheckBox(self.groupBox_4)
+        self.hidePointsCheckBox.setObjectName(u"hidePointsCheckBox")
+
+        self.gridLayout_4.addWidget(self.hidePointsCheckBox, 5, 1, 1, 1)
+
+        self.playButton = QPushButton(self.groupBox_4)
+        self.playButton.setObjectName(u"playButton")
+
+        self.gridLayout_4.addWidget(self.playButton, 0, 0, 2, 1)
+
+        self.hideframesCheckBox = QCheckBox(self.groupBox_4)
+        self.hideframesCheckBox.setObjectName(u"hideframesCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideframesCheckBox, 6, 0, 1, 1)
+
+        self.hideMasksCheckBox = QCheckBox(self.groupBox_4)
+        self.hideMasksCheckBox.setObjectName(u"hideMasksCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideMasksCheckBox, 5, 0, 1, 1)
+
         self.fpsSpinBox = QSpinBox(self.groupBox_4)
         self.fpsSpinBox.setObjectName(u"fpsSpinBox")
         self.fpsSpinBox.setMinimum(1)
@@ -98,26 +134,10 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.fpsSpinBox, 1, 1, 1, 1)
 
-        self.hideHistogramCheckBox = QCheckBox(self.groupBox_4)
-        self.hideHistogramCheckBox.setObjectName(u"hideHistogramCheckBox")
-        self.hideHistogramCheckBox.setChecked(True)
+        self.label = QLabel(self.groupBox_4)
+        self.label.setObjectName(u"label")
 
-        self.gridLayout_4.addWidget(self.hideHistogramCheckBox, 6, 1, 1, 1)
-
-        self.hidePointsCheckBox = QCheckBox(self.groupBox_4)
-        self.hidePointsCheckBox.setObjectName(u"hidePointsCheckBox")
-
-        self.gridLayout_4.addWidget(self.hidePointsCheckBox, 5, 1, 1, 1)
-
-        self.label_3 = QLabel(self.groupBox_4)
-        self.label_3.setObjectName(u"label_3")
-
-        self.gridLayout_4.addWidget(self.label_3, 3, 2, 1, 1)
-
-        self.hideframesCheckBox = QCheckBox(self.groupBox_4)
-        self.hideframesCheckBox.setObjectName(u"hideframesCheckBox")
-
-        self.gridLayout_4.addWidget(self.hideframesCheckBox, 6, 0, 1, 1)
+        self.gridLayout_4.addWidget(self.label, 1, 2, 1, 1)
 
         self.lineWidthSpinBox = QSpinBox(self.groupBox_4)
         self.lineWidthSpinBox.setObjectName(u"lineWidthSpinBox")
@@ -126,26 +146,6 @@ class Ui_MainWindow(object):
         self.lineWidthSpinBox.setValue(3)
 
         self.gridLayout_4.addWidget(self.lineWidthSpinBox, 3, 1, 1, 1)
-
-        self.playButton = QPushButton(self.groupBox_4)
-        self.playButton.setObjectName(u"playButton")
-
-        self.gridLayout_4.addWidget(self.playButton, 0, 0, 2, 1)
-
-        self.label = QLabel(self.groupBox_4)
-        self.label.setObjectName(u"label")
-
-        self.gridLayout_4.addWidget(self.label, 1, 2, 1, 1)
-
-        self.hideMasksCheckBox = QCheckBox(self.groupBox_4)
-        self.hideMasksCheckBox.setObjectName(u"hideMasksCheckBox")
-
-        self.gridLayout_4.addWidget(self.hideMasksCheckBox, 5, 0, 1, 1)
-
-        self.hideContoursCheckBox = QCheckBox(self.groupBox_4)
-        self.hideContoursCheckBox.setObjectName(u"hideContoursCheckBox")
-
-        self.gridLayout_4.addWidget(self.hideContoursCheckBox, 3, 0, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox_4)
@@ -159,15 +159,20 @@ class Ui_MainWindow(object):
 
         self.gridLayout_3.addWidget(self.addKeyFrameButton, 1, 0, 1, 1)
 
-        self.keyFramesListView = QListView(self.groupBox_3)
-        self.keyFramesListView.setObjectName(u"keyFramesListView")
-
-        self.gridLayout_3.addWidget(self.keyFramesListView, 0, 0, 1, 2)
-
         self.deleteKeyFrameButton = QPushButton(self.groupBox_3)
         self.deleteKeyFrameButton.setObjectName(u"deleteKeyFrameButton")
 
         self.gridLayout_3.addWidget(self.deleteKeyFrameButton, 1, 1, 1, 1)
+
+        self.deleteAllKFButton = QPushButton(self.groupBox_3)
+        self.deleteAllKFButton.setObjectName(u"deleteAllKFButton")
+
+        self.gridLayout_3.addWidget(self.deleteAllKFButton, 1, 2, 1, 1)
+
+        self.keyFramesListView = QListView(self.groupBox_3)
+        self.keyFramesListView.setObjectName(u"keyFramesListView")
+
+        self.gridLayout_3.addWidget(self.keyFramesListView, 0, 0, 1, 3)
 
 
         self.verticalLayout.addWidget(self.groupBox_3)
@@ -263,26 +268,26 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"DICOM SAM", None))
         self.groupBox.setTitle(QCoreApplication.translate("MainWindow", u"File", None))
+        self.openDicomButton.setText(QCoreApplication.translate("MainWindow", u"Open DICOM", None))
 #if QT_CONFIG(tooltip)
         self.loadKeyFramesButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Load keyframes from a file</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.loadKeyFramesButton.setText(QCoreApplication.translate("MainWindow", u"Load KFs", None))
-        self.exportContoursButton.setText(QCoreApplication.translate("MainWindow", u"Export contours", None))
-        self.exportMasksButton.setText(QCoreApplication.translate("MainWindow", u"Export masks", None))
-        self.openDicomButton.setText(QCoreApplication.translate("MainWindow", u"Open DICOM", None))
 #if QT_CONFIG(tooltip)
         self.saveKeyFramesButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Save keyframes to a file</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.saveKeyFramesButton.setText(QCoreApplication.translate("MainWindow", u"Save KFs", None))
+        self.exportMasksButton.setText(QCoreApplication.translate("MainWindow", u"Export masks", None))
+        self.exportContoursButton.setText(QCoreApplication.translate("MainWindow", u"Export contours", None))
         self.groupBox_4.setTitle(QCoreApplication.translate("MainWindow", u"View", None))
-        self.hideHistogramCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide hist", None))
-        self.hidePointsCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide points", None))
-        self.label_3.setText(QCoreApplication.translate("MainWindow", u"line width", None))
-        self.hideframesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide frames", None))
-        self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
-        self.label.setText(QCoreApplication.translate("MainWindow", u"fps", None))
-        self.hideMasksCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide masks", None))
         self.hideContoursCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide contours", None))
+        self.hideHistogramCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide hist", None))
+        self.label_3.setText(QCoreApplication.translate("MainWindow", u"line width", None))
+        self.hidePointsCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide points", None))
+        self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
+        self.hideframesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide frames", None))
+        self.hideMasksCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide masks", None))
+        self.label.setText(QCoreApplication.translate("MainWindow", u"fps", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
 #if QT_CONFIG(tooltip)
         self.addKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Add selected frame to keyframes</p></body></html>", None))
@@ -292,6 +297,7 @@ class Ui_MainWindow(object):
         self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.deleteKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Remove KF", None))
+        self.deleteAllKFButton.setText(QCoreApplication.translate("MainWindow", u"Clear all", None))
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", u"Segment", None))
 #if QT_CONFIG(tooltip)
         self.segSingleButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment selected keyframe</p></body></html>", None))

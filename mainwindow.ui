@@ -33,6 +33,13 @@
           <string>File</string>
          </property>
          <layout class="QGridLayout" name="gridLayout">
+          <item row="0" column="0">
+           <widget class="QPushButton" name="openDicomButton">
+            <property name="text">
+             <string>Open DICOM</string>
+            </property>
+           </widget>
+          </item>
           <item row="0" column="1">
            <widget class="QPushButton" name="loadKeyFramesButton">
             <property name="toolTip">
@@ -43,26 +50,11 @@
             </property>
            </widget>
           </item>
-          <item row="1" column="1">
-           <widget class="QPushButton" name="exportContoursButton">
-            <property name="text">
-             <string>Export contours</string>
-            </property>
-           </widget>
+          <item row="1" column="1" colspan="2">
+           <widget class="QComboBox" name="checkpointsComboBox"/>
           </item>
           <item row="1" column="0">
-           <widget class="QPushButton" name="exportMasksButton">
-            <property name="text">
-             <string>Export masks</string>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="0">
-           <widget class="QPushButton" name="openDicomButton">
-            <property name="text">
-             <string>Open DICOM</string>
-            </property>
-           </widget>
+           <widget class="QComboBox" name="engineComboBox"/>
           </item>
           <item row="0" column="2">
            <widget class="QPushButton" name="saveKeyFramesButton">
@@ -74,11 +66,19 @@
             </property>
            </widget>
           </item>
-          <item row="2" column="1" colspan="2">
-           <widget class="QComboBox" name="checkpointsComboBox"/>
-          </item>
           <item row="2" column="0">
-           <widget class="QComboBox" name="engineComboBox"/>
+           <widget class="QPushButton" name="exportMasksButton">
+            <property name="text">
+             <string>Export masks</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QPushButton" name="exportContoursButton">
+            <property name="text">
+             <string>Export contours</string>
+            </property>
+           </widget>
           </item>
          </layout>
         </widget>
@@ -89,6 +89,58 @@
           <string>View</string>
          </property>
          <layout class="QGridLayout" name="gridLayout_4">
+          <item row="3" column="0">
+           <widget class="QCheckBox" name="hideContoursCheckBox">
+            <property name="text">
+             <string>hide contours</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <widget class="QCheckBox" name="hideHistogramCheckBox">
+            <property name="text">
+             <string>hide hist</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="2">
+           <widget class="QLabel" name="label_3">
+            <property name="text">
+             <string>line width</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QCheckBox" name="hidePointsCheckBox">
+            <property name="text">
+             <string>hide points</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="0" rowspan="2">
+           <widget class="QPushButton" name="playButton">
+            <property name="text">
+             <string>Play</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0">
+           <widget class="QCheckBox" name="hideframesCheckBox">
+            <property name="text">
+             <string>hide frames</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0">
+           <widget class="QCheckBox" name="hideMasksCheckBox">
+            <property name="text">
+             <string>hide masks</string>
+            </property>
+           </widget>
+          </item>
           <item row="1" column="1">
            <widget class="QSpinBox" name="fpsSpinBox">
             <property name="minimum">
@@ -105,34 +157,10 @@
             </property>
            </widget>
           </item>
-          <item row="6" column="1">
-           <widget class="QCheckBox" name="hideHistogramCheckBox">
+          <item row="1" column="2">
+           <widget class="QLabel" name="label">
             <property name="text">
-             <string>hide hist</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-          <item row="5" column="1">
-           <widget class="QCheckBox" name="hidePointsCheckBox">
-            <property name="text">
-             <string>hide points</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="2">
-           <widget class="QLabel" name="label_3">
-            <property name="text">
-             <string>line width</string>
-            </property>
-           </widget>
-          </item>
-          <item row="6" column="0">
-           <widget class="QCheckBox" name="hideframesCheckBox">
-            <property name="text">
-             <string>hide frames</string>
+             <string>fps</string>
             </property>
            </widget>
           </item>
@@ -146,34 +174,6 @@
             </property>
             <property name="value">
              <number>3</number>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="0" rowspan="2">
-           <widget class="QPushButton" name="playButton">
-            <property name="text">
-             <string>Play</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="2">
-           <widget class="QLabel" name="label">
-            <property name="text">
-             <string>fps</string>
-            </property>
-           </widget>
-          </item>
-          <item row="5" column="0">
-           <widget class="QCheckBox" name="hideMasksCheckBox">
-            <property name="text">
-             <string>hide masks</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="0">
-           <widget class="QCheckBox" name="hideContoursCheckBox">
-            <property name="text">
-             <string>hide contours</string>
             </property>
            </widget>
           </item>
@@ -196,9 +196,6 @@
             </property>
            </widget>
           </item>
-          <item row="0" column="0" colspan="2">
-           <widget class="QListView" name="keyFramesListView"/>
-          </item>
           <item row="1" column="1">
            <widget class="QPushButton" name="deleteKeyFrameButton">
             <property name="toolTip">
@@ -208,6 +205,16 @@
              <string>Remove KF</string>
             </property>
            </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QPushButton" name="deleteAllKFButton">
+            <property name="text">
+             <string>Clear all</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="0" colspan="3">
+           <widget class="QListView" name="keyFramesListView"/>
           </item>
          </layout>
         </widget>

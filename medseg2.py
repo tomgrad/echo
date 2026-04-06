@@ -18,6 +18,24 @@ def _load_npz_predictor_builder(label):
         ) from exc
 
 
+def _resolve_runtime_dependencies(label):
+    """Validate required runtime deps once and return initialized modules/builders."""
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - depends on runtime env
+        raise RuntimeError(
+            f"Could not import torch for {label}. Ensure PyTorch with CUDA is installed."
+        ) from exc
+
+    build_sam2_video_predictor_npz = _load_npz_predictor_builder(label)
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
+
+    torch.set_float32_matmul_precision("high")
+    return torch, build_sam2_video_predictor_npz
+
+
 @dataclass
 class PreparedVolume:
     vol_u8: np.ndarray
@@ -41,11 +59,13 @@ class MedSeg2Segmenter:
         self.checkpoint_path = checkpoint_path
         self.model_cfg = model_cfg
         self.image_size = image_size
-        self._predictor = None
-        self._torch = None
+        self.torch, self._build_sam2_video_predictor_npz = _resolve_runtime_dependencies(
+            self.__class__.__name__
+        )
+        self._predictor = self._create_predictor()
 
-    def _ensure_loaded(self):
-        raise NotImplementedError("Subclasses must implement _ensure_loaded().")
+    def _create_predictor(self):
+        raise NotImplementedError("Subclasses must implement _create_predictor().")
 
 
 class Sam2Segmenter(MedSeg2Segmenter):
@@ -59,28 +79,12 @@ class Sam2Segmenter(MedSeg2Segmenter):
     ) -> None:
         super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
 
-    def _ensure_loaded(self):
-        if self._predictor is not None:
-            return
-
-        try:
-            import torch
-            build_sam2_video_predictor_npz = _load_npz_predictor_builder("SAM2")
-        except Exception as exc:  # pragma: no cover - depends on runtime env
-            raise RuntimeError(
-                "Could not load SAM2 builder from the installed sam2 package."
-            ) from exc
-
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
-
-        torch.set_float32_matmul_precision("high")
-        self._predictor = build_sam2_video_predictor_npz(
+    def _create_predictor(self):
+        return self._build_sam2_video_predictor_npz(
             self.model_cfg,
             self.checkpoint_path,
             device="cuda",
         )
-        self._torch = torch
 
     @staticmethod
     def _read_window_from_dicom(ds) -> Tuple[Optional[float], Optional[float]]:
@@ -98,10 +102,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
         return center, width
 
     def _prepare_volume(self, pixel_array: np.ndarray, dicom_ds) -> PreparedVolume:
-        self._ensure_loaded()
-        if self._torch is None:
-            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
-
         arr = pixel_array.astype(np.float32)
         if arr.ndim == 2:
             vol = arr[None, ...]
@@ -125,17 +125,17 @@ class Sam2Segmenter(MedSeg2Segmenter):
         height, width = vol_u8.shape[1:]
 
         # Convert (D,H,W) -> (D,3,S,S) with bilinear resize.
-        v = self._torch.from_numpy(vol_u8).float().unsqueeze(1) / 255.0
+        v = self.torch.from_numpy(vol_u8).float().unsqueeze(1) / 255.0
         v = v.repeat(1, 3, 1, 1)
-        v = self._torch.nn.functional.interpolate(
+        v = self.torch.nn.functional.interpolate(
             v,
             size=(self.image_size, self.image_size),
             mode="bilinear",
             align_corners=False,
         )
 
-        img_mean = self._torch.tensor((0.485, 0.456, 0.406), dtype=self._torch.float32)[None, :, None, None]
-        img_std = self._torch.tensor((0.229, 0.224, 0.225), dtype=self._torch.float32)[None, :, None, None]
+        img_mean = self.torch.tensor((0.485, 0.456, 0.406), dtype=self.torch.float32)[None, :, None, None]
+        img_std = self.torch.tensor((0.229, 0.224, 0.225), dtype=self.torch.float32)[None, :, None, None]
 
         img_t = v.cuda(non_blocking=True)
         img_t -= img_mean.cuda(non_blocking=True)
@@ -153,7 +153,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         return coords, labels
 
     @staticmethod
-    def _mask_from_logits(mask_logits, torch_mod) -> np.ndarray:
+    def _mask_from_logits(mask_logits) -> np.ndarray:
         return (mask_logits[0] > 0.0).detach().to("cpu").numpy()[0].astype(np.uint8)
 
     def segment_single_keyframe(
@@ -164,10 +164,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
         frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        self._ensure_loaded()
-        if self._torch is None:
-            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
-
         prep = self._prepare_volume(pixel_array, dicom_ds)
         segs_3d = np.zeros_like(prep.vol_u8, dtype=np.uint8)
         coords, labels = self._prompt_from_points(frame_points)
@@ -175,7 +171,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if progress_callback is not None:
             progress_callback(0, total, "Initializing")
 
-        with self._torch.inference_mode(), self._torch.autocast("cuda", dtype=self._torch.bfloat16):
+        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
             _, _, out_mask_logits = self._predictor.add_new_points_or_box(
                 inference_state=inference_state,
@@ -184,7 +180,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                 points=coords,
                 labels=labels,
             )
-            segs_3d[frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+            segs_3d[frame_idx] = self._mask_from_logits(out_mask_logits)
             if progress_callback is not None:
                 progress_callback(1, total, "Segmenting")
             self._predictor.reset_state(inference_state)
@@ -200,10 +196,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
         start_frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        self._ensure_loaded()
-        if self._torch is None:
-            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
-
         if end_frame_idx < start_frame_idx:
             raise ValueError("end_frame_idx must be >= start_frame_idx")
 
@@ -215,7 +207,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if progress_callback is not None:
             progress_callback(0, total, "Initializing")
 
-        with self._torch.inference_mode(), self._torch.autocast("cuda", dtype=self._torch.bfloat16):
+        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
             _, _, out_mask_logits = self._predictor.add_new_points_or_box(
                 inference_state=inference_state,
@@ -224,7 +216,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                 points=coords,
                 labels=labels,
             )
-            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits)
             processed.add(start_frame_idx)
             if progress_callback is not None:
                 progress_callback(len(processed), total, "Propagating forward")
@@ -234,7 +226,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                     continue
                 if out_frame_idx > end_frame_idx:
                     break
-                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
                 if out_frame_idx not in processed:
                     processed.add(out_frame_idx)
                     if progress_callback is not None:
@@ -253,10 +245,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
         start_frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        self._ensure_loaded()
-        if self._torch is None:
-            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
-
         if start_frame_idx < end_frame_idx:
             raise ValueError("For backward range, start_frame_idx must be >= end_frame_idx")
 
@@ -268,7 +256,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if progress_callback is not None:
             progress_callback(0, total, "Initializing")
 
-        with self._torch.inference_mode(), self._torch.autocast("cuda", dtype=self._torch.bfloat16):
+        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
             _, _, out_mask_logits = self._predictor.add_new_points_or_box(
                 inference_state=inference_state,
@@ -277,7 +265,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                 points=coords,
                 labels=labels,
             )
-            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits)
             processed.add(start_frame_idx)
             if progress_callback is not None:
                 progress_callback(len(processed), total, "Propagating backward")
@@ -289,7 +277,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                     continue
                 if out_frame_idx < end_frame_idx:
                     break
-                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
                 if out_frame_idx not in processed:
                     processed.add(out_frame_idx)
                     if progress_callback is not None:
@@ -307,10 +295,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
         key_frame_points: Dict[int, Sequence[Sequence[int]]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        self._ensure_loaded()
-        if self._torch is None:
-            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
-
         if not key_frames:
             raise ValueError("At least one keyframe is required.")
 
@@ -322,7 +306,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if progress_callback is not None:
             progress_callback(0, frame_count, "Initializing")
 
-        with self._torch.inference_mode(), self._torch.autocast("cuda", dtype=self._torch.bfloat16):
+        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             # Forward segmentation between successive keyframes (and last keyframe to end).
             for idx, kf in enumerate(sorted_kf):
                 if kf < 0 or kf >= frame_count:
@@ -342,7 +326,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                     points=coords,
                     labels=labels,
                 )
-                segs_3d[kf] = self._mask_from_logits(out_mask_logits, self._torch)
+                segs_3d[kf] = self._mask_from_logits(out_mask_logits)
                 if kf not in processed:
                     processed.add(kf)
                     if progress_callback is not None:
@@ -353,7 +337,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                         continue
                     if out_frame_idx > next_kf:
                         break
-                    segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+                    segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
                     if out_frame_idx not in processed:
                         processed.add(out_frame_idx)
                         if progress_callback is not None:
@@ -375,7 +359,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                         points=coords,
                         labels=labels,
                     )
-                    segs_3d[first_kf] = self._mask_from_logits(out_mask_logits, self._torch)
+                    segs_3d[first_kf] = self._mask_from_logits(out_mask_logits)
                     if first_kf not in processed:
                         processed.add(first_kf)
                         if progress_callback is not None:
@@ -386,7 +370,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
                     ):
                         if out_frame_idx > first_kf:
                             continue
-                        segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits, self._torch)
+                        segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
                         if out_frame_idx not in processed:
                             processed.add(out_frame_idx)
                             if progress_callback is not None:
@@ -407,28 +391,11 @@ class MedSam2Segmenter(Sam2Segmenter):
     ) -> None:
         super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
 
-    def _ensure_loaded(self):
-        if self._predictor is not None:
-            return
-
-        try:
-            import torch
-            build_sam2_video_predictor_npz = _load_npz_predictor_builder("MedSAM2")
-        except Exception as exc:  # pragma: no cover - depends on runtime env
-            raise RuntimeError(
-                "Could not import MedSAM2 dependencies. "
-                "Ensure MedSAM2 fork package is properly installed."
-            ) from exc
-
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
-
-        torch.set_float32_matmul_precision("high")
+    def _create_predictor(self):
         hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
-        self._predictor = build_sam2_video_predictor_npz(
+        return self._build_sam2_video_predictor_npz(
             self.model_cfg,
             self.checkpoint_path,
             device="cuda",
             hydra_overrides_extra=hydra_overrides_extra,
         )
-        self._torch = torch

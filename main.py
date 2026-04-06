@@ -8,8 +8,10 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import numpy as np
 import pydicom
+import cv2
+from scipy import ndimage
 from PySide6.QtCore import QStringListModel, QTimer
-from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar, QComboBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
 from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from ui_mainwindow import Ui_MainWindow
@@ -55,12 +57,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.openDicomButton.clicked.connect(self.open_dicom_file)
         self.addKeyFrameButton.clicked.connect(self.add_key_frame)
         self.deleteKeyFrameButton.clicked.connect(self.delete_key_frame)
+        self.deleteAllKFButton.clicked.connect(self.delete_all_key_frames)
         self.keyFramesListView.clicked.connect(self.show_selected_key_frame)
         self.keyFramesListView.activated.connect(self.show_selected_key_frame)
         self.imageView.frameChanged.connect(self.refresh_point_overlay)
         self.imageView.pointClicked.connect(self.on_point_clicked)
         self.saveKeyFramesButton.clicked.connect(self.save_key_frames)
         self.loadKeyFramesButton.clicked.connect(self.load_key_frames)
+        self.exportMasksButton.clicked.connect(self.save_masks)
         self.playButton.clicked.connect(self.toggle_playback)
         self.segSingleButton.clicked.connect(self.segment_selected_keyframe)
         self.segRangeButton.clicked.connect(self.segment_keyframe_forward)
@@ -351,6 +355,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.refresh_point_overlay()
         self.show_status(f"Deleted key frame: {selected_frame}")
 
+    def delete_all_key_frames(self):
+        if not self.key_frames:
+            self.show_status("No key frames to delete.")
+            return
+
+        count = len(self.key_frames)
+        self.key_frames.clear()
+        self.key_frame_points.clear()
+        self.keyFramesListView.clearSelection()
+        self.refresh_key_frames_list()
+        self.refresh_point_overlay()
+        self.show_status(f"Deleted all key frames ({count}).")
+
     def on_point_clicked(self, x, y, action):
         frame = self.imageView.currentIndex
         if frame not in self.key_frames:
@@ -539,6 +556,23 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
         self.show_status(f"Loaded {len(self.key_frames)} key frame(s) from {path}", 6000)
+
+    def save_masks(self):
+        if self.segmentation_mask is None:
+            self.show_status("No segmentation mask available. Run segmentation first.")
+            return
+
+        if self.dicom_file_path:
+            dicom_stem = Path(self.dicom_file_path).stem
+        else:
+            dicom_stem = "dicom"
+
+        output_dir = Path(__file__).resolve().parent / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{dicom_stem}_mask.npy"
+
+        np.save(output_path, self.segmentation_mask.astype(np.uint8))
+        self.show_status(f"Saved masks to {output_path}", 6000)
 
     def _ensure_segmenter(self):
         engine_key = self._selected_engine_key()
@@ -769,16 +803,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status("No segmentation mask available. Run segmentation first.")
             return
 
-        try:
-            ndimage = importlib.import_module("scipy.ndimage")
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Missing dependency",
-                "scipy is required for mask fixing. Install dependencies from requirements.txt.",
-            )
-            return
-
         iterations = int(self.smoothSpinBox.value())
         self._start_segmentation_progress("Fixing masks...")
 
@@ -813,16 +837,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def find_external_contours(self):
         if self.segmentation_mask is None:
             self.show_status("No segmentation mask available. Run segmentation first.")
-            return
-
-        try:
-            cv2 = importlib.import_module("cv2")
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Missing dependency",
-                "opencv-python is required for contours. Install dependencies from requirements.txt.",
-            )
             return
 
         mask = self.segmentation_mask.astype(np.uint8)
