@@ -1,18 +1,20 @@
 import sys
 import xml.etree.ElementTree as ET
 import importlib
+import traceback
+import re
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import numpy as np
 import pydicom
 from PySide6.QtCore import QStringListModel, QTimer
-from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
+from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar, QComboBox
 
-from medseg2 import MedSeg2Segmenter
+from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from ui_mainwindow import Ui_MainWindow
 
-FRAMES_LIMIT = 100 # Max frames to load from a DICOM (for testing)
+FRAMES_LIMIT = 100  # Max frames to load from a DICOM (for testing)
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -23,6 +25,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.checkpoints_root_dir = Path(__file__).resolve().parent / "checkpoints"
         self.medsam2_checkpoints_dir = self.checkpoints_root_dir / "MedSAM2"
         self.sam2_checkpoints_dir = self.checkpoints_root_dir / "SAM2"
+        self.engine_names = {
+            "medsam2": "MedSAM2",
+            "sam2": "SAM2",
+        }
 
         self.pixel_array = None
         self.dicom_dataset = None
@@ -69,6 +75,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.hideHistogramCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
+        self._setup_engine_selector()
         self.checkpointsComboBox.currentIndexChanged.connect(self._on_checkpoint_changed)
         self._populate_checkpoints_combo()
         self._update_play_timer_interval(self.fpsSpinBox.value())
@@ -103,12 +110,177 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         QApplication.processEvents()
         self.seg_progress_bar.setVisible(False)
 
-    def _populate_checkpoints_combo(self):
-        checkpoint_paths = sorted(
-            self.medsam2_checkpoints_dir.glob("MedSAM2*.pt"),
-            key=lambda path: path.name.lower(),
+    def _setup_engine_selector(self):
+        self.engineComboBox.addItem(self.engine_names["medsam2"], "medsam2")
+        self.engineComboBox.addItem(self.engine_names["sam2"], "sam2")
+        self.engineComboBox.currentIndexChanged.connect(self._on_engine_changed)
+
+    def _selected_engine_key(self):
+        key = self.engineComboBox.currentData()
+        return key if key in self.engine_names else "medsam2"
+
+    def _current_engine_name(self):
+        return self.engine_names[self._selected_engine_key()]
+
+    def _checkpoint_candidates_for_engine(self, engine_key):
+        if engine_key == "sam2":
+            # SAM2 folder may include shell scripts; only keep checkpoint files.
+            matches = list(self.sam2_checkpoints_dir.glob("sam2*.pt"))
+            matches += list(self.sam2_checkpoints_dir.glob("SAM2*.pt"))
+            return sorted(set(matches), key=lambda path: path.name.lower())
+        return sorted(self.medsam2_checkpoints_dir.glob("MedSAM2*.pt"), key=lambda path: path.name.lower())
+
+    @staticmethod
+    def _default_checkpoint_name_for_engine(engine_key):
+        if engine_key == "sam2":
+            return "sam2.1_hiera_tiny.pt"
+        return "MedSAM2_latest.pt"
+
+    def _is_checkpoint_compatible(self, engine_key, checkpoint_path):
+        checkpoint_name = checkpoint_path.name
+        if engine_key == "sam2":
+            return checkpoint_path.parent == self.sam2_checkpoints_dir and checkpoint_name.lower().startswith("sam2")
+        return checkpoint_path.parent == self.medsam2_checkpoints_dir and checkpoint_name.startswith("MedSAM2")
+
+    def _checkpoint_hint_for_engine(self, engine_key):
+        if engine_key == "sam2":
+            return "sam2*.pt files in checkpoints/SAM2/."
+        return "MedSAM2*.pt files in checkpoints/MedSAM2/."
+
+    @staticmethod
+    def _sam2_package_dir():
+        try:
+            sam2_mod = importlib.import_module("sam2")
+            return Path(sam2_mod.__file__).resolve().parent
+        except Exception:
+            return None
+
+    @staticmethod
+    def _hiera_variant_from_checkpoint(checkpoint_path):
+        name = checkpoint_path.name.lower()
+        # MedSAM2-specific checkpoint names.
+        if "efficienttam_s" in name:
+            return "s"
+        if "efficienttam_ti" in name:
+            return "t"
+
+        # Common SAM2 family naming patterns.
+        if "hiera_tiny" in name or name.endswith("_ti.pt"):
+            return "t"
+        if "hiera_large" in name:
+            return "l"
+        if "hiera_base_plus" in name:
+            return "b+"
+        if "hiera_small" in name:
+            return "s"
+        return "t"
+
+    @staticmethod
+    def _sam2_config_candidate_for_variant(variant):
+        # Requested SAM2 config family: sam2.1_hiera_{t|s|b+}.yaml
+        if variant == "s":
+            suffix = "s"
+        elif variant == "b+":
+            suffix = "b+"
+        else:
+            suffix = "t"
+        return f"configs/sam2.1_hiera_{suffix}.yaml"
+
+    @classmethod
+    def _sam2_config_exists(cls, config_rel_path):
+        package_dir = cls._sam2_package_dir()
+        if package_dir is None:
+            return False
+        return (package_dir / config_rel_path).exists()
+
+    @classmethod
+    def _available_sam2_configs(cls):
+        package_dir = cls._sam2_package_dir()
+        if package_dir is None:
+            return []
+        return sorted(str(path.relative_to(package_dir)) for path in package_dir.rglob("*.yaml"))
+
+    @classmethod
+    def _model_cfg_for_selection(cls, engine_key, checkpoint_path):
+        variant = cls._hiera_variant_from_checkpoint(checkpoint_path)
+
+        if engine_key == "medsam2":
+            candidate = "configs/sam2.1_hiera_t512.yaml"
+            if cls._sam2_config_exists(candidate):
+                return candidate
+
+            package_dir = cls._sam2_package_dir()
+            available = cls._available_sam2_configs()
+            raise RuntimeError(
+                "Selected MedSAM2 checkpoint requires configs/sam2.1_hiera_t512.yaml in the "
+                "installed sam2 package, but it was not found. "
+                f"Imported sam2 package path: {package_dir}. "
+                f"Available configs in installed package: {available}"
+            )
+
+        # For SAM2 engine: prefer the standard sam2.1 layout.
+        candidate = cls._sam2_config_candidate_for_variant(variant)
+
+        if cls._sam2_config_exists(candidate):
+            return candidate
+
+        package_dir = cls._sam2_package_dir()
+        available = cls._available_sam2_configs()
+        raise RuntimeError(
+            "Selected SAM2 checkpoint requires SAM2 configs (configs/sam2.1/*.yaml) "
+            "inside the installed sam2 package, but they were not found. "
+            "If you are using the MedSAM2 fork only, copy the SAM2 config files into that package. "
+            f"Imported sam2 package path: {package_dir}. "
+            f"Available configs in installed package: {available}"
         )
-        default_name = "MedSAM2_latest.pt"
+
+    @classmethod
+    def _image_size_for_model_cfg(cls, model_cfg):
+        # Prefer explicit image_size declared in YAML when available.
+        package_dir = cls._sam2_package_dir()
+        if package_dir is not None:
+            cfg_path = package_dir / model_cfg
+            if cfg_path.exists():
+                try:
+                    text = cfg_path.read_text(encoding="utf-8", errors="ignore")
+                    match = re.search(r"^\s*image_size\s*:\s*(\d+)\s*$", text, flags=re.MULTILINE)
+                    if match:
+                        return int(match.group(1))
+                except Exception:
+                    pass
+
+        # Fallback heuristic from file naming.
+        if "512" in model_cfg:
+            return 512
+        return 1024
+
+    def _create_segmenter_for_selection(self, engine_key, checkpoint_path):
+        model_cfg = self._model_cfg_for_selection(engine_key, checkpoint_path)
+        if engine_key == "sam2":
+            image_size = self._image_size_for_model_cfg(model_cfg)
+            return Sam2Segmenter(
+                checkpoint_path=str(checkpoint_path),
+                model_cfg=model_cfg,
+                image_size=image_size,
+            )
+        # Keep MedSAM2 preprocessing at 512 to preserve historical behavior.
+        image_size = 512
+        return MedSam2Segmenter(
+            checkpoint_path=str(checkpoint_path),
+            model_cfg=model_cfg,
+            image_size=image_size,
+        )
+
+    def _on_engine_changed(self, _index=None):
+        self.segmenter = None
+        self._populate_checkpoints_combo()
+        self.show_status(f"Selected engine: {self._current_engine_name()}", 4000)
+
+    def _populate_checkpoints_combo(self):
+        engine_key = self._selected_engine_key()
+        checkpoint_paths = self._checkpoint_candidates_for_engine(engine_key)
+        default_name = self._default_checkpoint_name_for_engine(engine_key)
+        checkpoints_dir = self.sam2_checkpoints_dir if engine_key == "sam2" else self.medsam2_checkpoints_dir
 
         self.checkpointsComboBox.blockSignals(True)
         self.checkpointsComboBox.clear()
@@ -116,7 +288,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not checkpoint_paths:
             self.checkpointsComboBox.setEnabled(False)
             self.checkpointsComboBox.blockSignals(False)
-            self.show_status("No MedSAM2 checkpoints found in checkpoints/MedSAM2/.", 6000)
+            self.show_status(
+                f"No {self._current_engine_name()} checkpoints found in {checkpoints_dir.as_posix()}/.",
+                6000,
+            )
             return
 
         for checkpoint_path in checkpoint_paths:
@@ -141,9 +316,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         checkpoint_path = self._selected_checkpoint_path()
         self.segmenter = None
         if emit_status and checkpoint_path is not None:
-            self.show_status(f"Selected checkpoint: {checkpoint_path.name}", 4000)
-
-  
+            self.show_status(
+                f"Selected {self._current_engine_name()} checkpoint: {checkpoint_path.name}",
+                4000,
+            )
 
     def add_key_frame(self):
         if self.pixel_array is None:
@@ -348,7 +524,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.key_frame_points.clear()
         for kf_el in root.findall("keyframe"):
             frame_idx = int(kf_el.get("index"))
-            self.key_frames.append(frame_idx)
+            if frame_idx not in self.key_frames:
+                self.key_frames.append(frame_idx)
             pts = []
             for pt_el in kf_el.findall("point"):
                 pts.append([
@@ -357,20 +534,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     pt_el.get("positive") == "true",
                 ])
             if pts:
-                self.key_frame_points[frame_idx] = pts
+                self.key_frame_points.setdefault(frame_idx, []).extend(pts)
         self.key_frames.sort()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
         self.show_status(f"Loaded {len(self.key_frames)} key frame(s) from {path}", 6000)
 
     def _ensure_segmenter(self):
+        engine_key = self._selected_engine_key()
         checkpoint_path = self._selected_checkpoint_path()
         if checkpoint_path is None:
             raise RuntimeError(
-                "No MedSAM2 checkpoint selected. Add MedSAM2*.pt files to checkpoints/MedSAM2/."
+                f"No {self._current_engine_name()} checkpoint selected. Add {self._checkpoint_hint_for_engine(engine_key)}"
             )
+
+        if not checkpoint_path.exists():
+            raise RuntimeError(f"Selected checkpoint does not exist: {checkpoint_path}")
+
+        if not self._is_checkpoint_compatible(engine_key, checkpoint_path):
+            raise RuntimeError(
+                f"Selected checkpoint is not compatible with {self._current_engine_name()}. "
+                f"Use {self._checkpoint_hint_for_engine(engine_key)}"
+            )
+
         if self.segmenter is None:
-            self.segmenter = MedSeg2Segmenter(checkpoint_path=str(checkpoint_path))
+            self.segmenter = self._create_segmenter_for_selection(engine_key, checkpoint_path)
 
     def _ensure_ready_for_segmentation(self):
         if self.pixel_array is None or self.dicom_dataset is None:
@@ -400,6 +588,47 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.segmentation_mask = np.zeros_like(new_mask)
         self.segmentation_mask[start_frame:end_frame + 1] = new_mask[start_frame:end_frame + 1]
 
+    @staticmethod
+    def _format_segmentation_error(exc, stdout_text="", stderr_text="", traceback_text=""):
+        base_message = str(exc).strip()
+        if not base_message:
+            base_message = f"{exc.__class__.__name__} (no message)"
+
+        details = stderr_text.strip() or stdout_text.strip() or traceback_text.strip()
+        if not details:
+            return base_message
+
+        # Keep dialog readable and bounded for large backend traces.
+        details_tail = details[-4000:]
+        return f"{base_message}\n\nBackend details:\n{details_tail}"
+
+    def _run_segmentation(self, start_message, finish_message, segment_fn):
+        try:
+            self._ensure_segmenter()
+            self._start_segmentation_progress(start_message)
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                mask = segment_fn()
+            self._finish_segmentation_progress(finish_message)
+            return mask
+        except Exception as exc:
+            self.seg_progress_bar.setVisible(False)
+            out_text = out_buf.getvalue() if "out_buf" in locals() else ""
+            err_text = err_buf.getvalue() if "err_buf" in locals() else ""
+            trace_text = traceback.format_exc()
+            QMessageBox.critical(
+                self,
+                "Segmentation error",
+                self._format_segmentation_error(
+                    exc,
+                    stdout_text=out_text,
+                    stderr_text=err_text,
+                    traceback_text=trace_text,
+                ),
+            )
+            return None
+
     def segment_selected_keyframe(self):
         if not self._ensure_ready_for_segmentation():
             return
@@ -412,21 +641,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if points is None:
             return
 
-        try:
-            self._ensure_segmenter()
-            self._start_segmentation_progress("Running single-frame segmentation...")
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                mask = self.segmenter.segment_single_keyframe(
-                    pixel_array=self.pixel_array,
-                    dicom_ds=self.dicom_dataset,
-                    frame_idx=frame_idx,
-                    frame_points=points,
-                    progress_callback=self._update_segmentation_progress,
-                )
-            self._finish_segmentation_progress("Single-frame segmentation done. Mask overlay updated.")
-        except Exception as exc:
-            self.seg_progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Segmentation error", str(exc))
+        mask = self._run_segmentation(
+            "Running single-frame segmentation...",
+            "Single-frame segmentation done. Mask overlay updated.",
+            lambda: self.segmenter.segment_single_keyframe(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                frame_idx=frame_idx,
+                frame_points=points,
+                progress_callback=self._update_segmentation_progress,
+            )
+        )
+        if mask is None:
             return
 
         self._merge_mask(mask, frame_idx, frame_idx)
@@ -445,7 +671,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if points is None:
             return
 
-        sorted_kf = sorted(self.key_frames)
+        sorted_kf = sorted(set(self.key_frames))
         start_pos = sorted_kf.index(frame_idx)
         end_frame = (
             sorted_kf[start_pos + 1]
@@ -453,24 +679,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             else self._frame_count() - 1
         )
 
-        try:
-            self._ensure_segmenter()
-            self._start_segmentation_progress("Running forward range segmentation...")
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                mask = self.segmenter.segment_forward_range(
-                    pixel_array=self.pixel_array,
-                    dicom_ds=self.dicom_dataset,
-                    start_frame_idx=frame_idx,
-                    end_frame_idx=end_frame,
-                    start_frame_points=points,
-                    progress_callback=self._update_segmentation_progress,
-                )
-            self._finish_segmentation_progress(
-                f"Forward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated."
+        mask = self._run_segmentation(
+            "Running forward range segmentation...",
+            f"Forward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated.",
+            lambda: self.segmenter.segment_forward_range(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                start_frame_idx=frame_idx,
+                end_frame_idx=end_frame,
+                start_frame_points=points,
+                progress_callback=self._update_segmentation_progress,
             )
-        except Exception as exc:
-            self.seg_progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Segmentation error", str(exc))
+        )
+        if mask is None:
             return
 
         self._merge_mask(mask, frame_idx, end_frame)
@@ -489,7 +710,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if points is None:
             return
 
-        sorted_kf = sorted(self.key_frames)
+        sorted_kf = sorted(set(self.key_frames))
         start_pos = sorted_kf.index(frame_idx)
         end_frame = (
             sorted_kf[start_pos - 1]
@@ -497,24 +718,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             else 0
         )
 
-        try:
-            self._ensure_segmenter()
-            self._start_segmentation_progress("Running backward range segmentation...")
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                mask = self.segmenter.segment_backward_range(
-                    pixel_array=self.pixel_array,
-                    dicom_ds=self.dicom_dataset,
-                    start_frame_idx=frame_idx,
-                    end_frame_idx=end_frame,
-                    start_frame_points=points,
-                    progress_callback=self._update_segmentation_progress,
-                )
-            self._finish_segmentation_progress(
-                f"Backward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated."
+        mask = self._run_segmentation(
+            "Running backward range segmentation...",
+            f"Backward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated.",
+            lambda: self.segmenter.segment_backward_range(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                start_frame_idx=frame_idx,
+                end_frame_idx=end_frame,
+                start_frame_points=points,
+                progress_callback=self._update_segmentation_progress,
             )
-        except Exception as exc:
-            self.seg_progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Segmentation error", str(exc))
+        )
+        if mask is None:
             return
 
         self._merge_mask(mask, end_frame, frame_idx)
@@ -530,21 +746,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status(f"These key frames have no points: {missing_points}")
             return
 
-        try:
-            self._ensure_segmenter()
-            self._start_segmentation_progress("Running all-frames segmentation...")
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                mask = self.segmenter.segment_all_with_keyframes(
-                    pixel_array=self.pixel_array,
-                    dicom_ds=self.dicom_dataset,
-                    key_frames=self.key_frames,
-                    key_frame_points=self.key_frame_points,
-                    progress_callback=self._update_segmentation_progress,
-                )
-            self._finish_segmentation_progress("All-frame segmentation done. Mask overlay updated.")
-        except Exception as exc:
-            self.seg_progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Segmentation error", str(exc))
+        mask = self._run_segmentation(
+            "Running all-frames segmentation...",
+            "All-frame segmentation done. Mask overlay updated.",
+            lambda: self.segmenter.segment_all_with_keyframes(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                key_frames=self.key_frames,
+                key_frame_points=self.key_frame_points,
+                progress_callback=self._update_segmentation_progress,
+            )
+        )
+        if mask is None:
             return
 
         self.segmentation_mask = mask

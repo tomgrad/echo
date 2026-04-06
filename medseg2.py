@@ -7,6 +7,17 @@ import importlib
 import numpy as np
 
 
+def _load_npz_predictor_builder(label):
+    """Load NPZ SAM2 predictor builder from installed sam2 package."""
+    try:
+        build_mod = importlib.import_module("sam2.build_sam")
+        return getattr(build_mod, "build_sam2_video_predictor_npz")
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            f"Could not import build_sam2_video_predictor_npz for {label} from the installed sam2 package."
+        ) from exc
+
+
 @dataclass
 class PreparedVolume:
     vol_u8: np.ndarray
@@ -19,11 +30,11 @@ ProgressCallback = Callable[[int, int, str], None]
 
 
 class MedSeg2Segmenter:
-    """Thin MedSAM2 wrapper for keyframe-driven DICOM segmentation."""
+    """Common SAM2-family wrapper for keyframe-driven DICOM segmentation."""
 
     def __init__(
         self,
-        checkpoint_path: str = "checkpoints/MedSAM2_latest.pt",
+        checkpoint_path: str = "checkpoints/MedSAM2/MedSAM2_latest.pt",
         model_cfg: str = "configs/sam2.1_hiera_t512.yaml",
         image_size: int = 512,
     ) -> None:
@@ -34,23 +45,41 @@ class MedSeg2Segmenter:
         self._torch = None
 
     def _ensure_loaded(self):
+        raise NotImplementedError("Subclasses must implement _ensure_loaded().")
+
+
+class Sam2Segmenter(MedSeg2Segmenter):
+    """SAM2 adapter using NPZ predictor for DICOM tensor workflows."""
+
+    def __init__(
+        self,
+        checkpoint_path: str = "checkpoints/SAM2/sam2.1_hiera_tiny.pt",
+        model_cfg: str = "configs/sam2.1_hiera_t.yaml",
+        image_size: int = 512,
+    ) -> None:
+        super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
+
+    def _ensure_loaded(self):
         if self._predictor is not None:
             return
 
         try:
             import torch
-            build_mod = importlib.import_module("sam2.build_sam")
-            build_sam2_video_predictor_npz = getattr(build_mod, "build_sam2_video_predictor_npz")
+            build_sam2_video_predictor_npz = _load_npz_predictor_builder("SAM2")
         except Exception as exc:  # pragma: no cover - depends on runtime env
             raise RuntimeError(
-                "Could not import MedSAM2 dependencies (torch/sam2)."
+                "Could not load SAM2 builder from the installed sam2 package."
             ) from exc
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
 
         torch.set_float32_matmul_precision("high")
-        self._predictor = build_sam2_video_predictor_npz(self.model_cfg, self.checkpoint_path)
+        self._predictor = build_sam2_video_predictor_npz(
+            self.model_cfg,
+            self.checkpoint_path,
+            device="cuda",
+        )
         self._torch = torch
 
     @staticmethod
@@ -70,7 +99,8 @@ class MedSeg2Segmenter:
 
     def _prepare_volume(self, pixel_array: np.ndarray, dicom_ds) -> PreparedVolume:
         self._ensure_loaded()
-        assert self._torch is not None
+        if self._torch is None:
+            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
 
         arr = pixel_array.astype(np.float32)
         if arr.ndim == 2:
@@ -135,7 +165,8 @@ class MedSeg2Segmenter:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         self._ensure_loaded()
-        assert self._torch is not None
+        if self._torch is None:
+            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
 
         prep = self._prepare_volume(pixel_array, dicom_ds)
         segs_3d = np.zeros_like(prep.vol_u8, dtype=np.uint8)
@@ -170,7 +201,8 @@ class MedSeg2Segmenter:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         self._ensure_loaded()
-        assert self._torch is not None
+        if self._torch is None:
+            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
 
         if end_frame_idx < start_frame_idx:
             raise ValueError("end_frame_idx must be >= start_frame_idx")
@@ -222,7 +254,8 @@ class MedSeg2Segmenter:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         self._ensure_loaded()
-        assert self._torch is not None
+        if self._torch is None:
+            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
 
         if start_frame_idx < end_frame_idx:
             raise ValueError("For backward range, start_frame_idx must be >= end_frame_idx")
@@ -275,7 +308,8 @@ class MedSeg2Segmenter:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         self._ensure_loaded()
-        assert self._torch is not None
+        if self._torch is None:
+            raise RuntimeError("SAM2 backend initialization failed: torch context is unavailable.")
 
         if not key_frames:
             raise ValueError("At least one keyframe is required.")
@@ -360,3 +394,41 @@ class MedSeg2Segmenter:
                     self._predictor.reset_state(inference_state)
 
         return segs_3d
+
+
+class MedSam2Segmenter(Sam2Segmenter):
+    """MedSAM2 adapter with MedSAM2-specific defaults and NPZ predictor builder."""
+
+    def __init__(
+        self,
+        checkpoint_path: str = "checkpoints/MedSAM2/MedSAM2_latest.pt",
+        model_cfg: str = "configs/sam2.1_hiera_t512.yaml",
+        image_size: int = 512,
+    ) -> None:
+        super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
+
+    def _ensure_loaded(self):
+        if self._predictor is not None:
+            return
+
+        try:
+            import torch
+            build_sam2_video_predictor_npz = _load_npz_predictor_builder("MedSAM2")
+        except Exception as exc:  # pragma: no cover - depends on runtime env
+            raise RuntimeError(
+                "Could not import MedSAM2 dependencies. "
+                "Ensure MedSAM2 fork package is properly installed."
+            ) from exc
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
+
+        torch.set_float32_matmul_precision("high")
+        hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
+        self._predictor = build_sam2_video_predictor_npz(
+            self.model_cfg,
+            self.checkpoint_path,
+            device="cuda",
+            hydra_overrides_extra=hydra_overrides_extra,
+        )
+        self._torch = torch

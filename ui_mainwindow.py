@@ -27,7 +27,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(1112, 769)
+        MainWindow.resize(1112, 790)
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.horizontalLayout = QHBoxLayout(self.centralwidget)
@@ -75,7 +75,12 @@ class Ui_MainWindow(object):
         self.checkpointsComboBox = QComboBox(self.groupBox)
         self.checkpointsComboBox.setObjectName(u"checkpointsComboBox")
 
-        self.gridLayout.addWidget(self.checkpointsComboBox, 2, 0, 1, 2)
+        self.gridLayout.addWidget(self.checkpointsComboBox, 2, 1, 1, 2)
+
+        self.engineComboBox = QComboBox(self.groupBox)
+        self.engineComboBox.setObjectName(u"engineComboBox")
+
+        self.gridLayout.addWidget(self.engineComboBox, 2, 0, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox)
