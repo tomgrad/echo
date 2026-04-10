@@ -4,3 +4,5 @@ pydicom
 pyqtgraph
 PySide6
 scipy
+scikit-image
+matplotlib

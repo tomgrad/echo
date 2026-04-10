@@ -20,24 +20,13 @@ class ImageView(pg.ImageView):
         self.ui.roiPlot.hideButtons()
         self.timeLine.sigPositionChanged.connect(self._on_timeline_changed)
 
-        # Scatter overlays for prompt points
-        self._pos_scatter = pg.ScatterPlotItem(
-            symbol='o', size=12,
-            pen=pg.mkPen('g', width=2),
-            brush=pg.mkBrush(0, 200, 0, 160),
-            hoverable=False,
-        )
-        self._neg_scatter = pg.ScatterPlotItem(
-            symbol='o', size=12,
-            pen=pg.mkPen('r', width=2),
-            brush=pg.mkBrush(200, 0, 0, 160),
-            hoverable=False,
-        )
+        # Dynamic scatter overlays by object id.
+        self._point_items = {}
+        self._points_visible = True
         self._mask_item = pg.ImageItem()
         self._mask_item.setZValue(10)
         self._mask_item.setCompositionMode(QPainter.CompositionMode_SourceOver)
         self._mask_lut = np.zeros((256, 4), dtype=np.ubyte)
-        self._mask_lut[1] = [255, 0, 0, 160]
         self._mask_item.setLookupTable(self._mask_lut)
         self._mask_item.setLevels((0, 255))
         self._contour_color = (255, 255, 0, 255)
@@ -47,8 +36,6 @@ class ImageView(pg.ImageView):
             connect="finite",
         )
         self._contour_item.setZValue(20)
-        self.view.addItem(self._pos_scatter)
-        self.view.addItem(self._neg_scatter)
         self.view.addItem(self._mask_item)
         self.view.addItem(self._contour_item)
 
@@ -92,15 +79,85 @@ class ImageView(pg.ImageView):
         target = max(0, min(frame_count - 1, target))
         self.setCurrentIndex(target)
 
+    def _color_for_obj_id(self, obj_id):
+        # Use deterministic HSV wheel to keep object colors stable across frames.
+        hue = (int(obj_id) * 53) % 360
+        return pg.hsvColor(hue / 360.0, sat=0.85, val=1.0, alpha=0.95)
+
+    def _point_items_for_obj(self, obj_id):
+        obj_id = int(obj_id)
+        if obj_id in self._point_items:
+            return self._point_items[obj_id]
+
+        color = self._color_for_obj_id(obj_id)
+        pen = pg.mkPen(color, width=2)
+        pos = pg.ScatterPlotItem(
+            symbol='o', size=12,
+            pen=pen,
+            brush=pg.mkBrush(color),
+            hoverable=False,
+        )
+        neg = pg.ScatterPlotItem(
+            symbol='x', size=12,
+            pen=pen,
+            brush=pg.mkBrush(color),
+            hoverable=False,
+        )
+        pos.setVisible(self._points_visible)
+        neg.setVisible(self._points_visible)
+        self.view.addItem(pos)
+        self.view.addItem(neg)
+        self._point_items[obj_id] = {"positive": pos, "negative": neg}
+        return self._point_items[obj_id]
+
+    def _set_mask_lut_for_labels(self, max_label):
+        max_label = max(0, int(max_label))
+        size = max(256, max_label + 1)
+        lut = np.zeros((size, 4), dtype=np.ubyte)
+        for label in range(1, max_label + 1):
+            color = self._color_for_obj_id(label)
+            rgba = color.getRgb()
+            lut[label] = [rgba[0], rgba[1], rgba[2], 160]
+        self._mask_lut = lut
+        self._mask_item.setLookupTable(self._mask_lut)
+
     def set_points(self, positive_points, negative_points):
         """Update prompt-point overlays.  Each arg is a list of (x, y) tuples."""
-        self._pos_scatter.setData(pos=positive_points or [])
-        self._neg_scatter.setData(pos=negative_points or [])
+        self.set_points_by_object({
+            1: {
+                "positive": positive_points or [],
+                "negative": negative_points or [],
+            }
+        })
+
+    def set_points_by_object(self, points_by_object):
+        """Update prompt points for all objects.
+
+        points_by_object format:
+            {obj_id: {"positive": [(x, y), ...], "negative": [(x, y), ...]}}
+        """
+        active_ids = {int(obj_id) for obj_id in points_by_object.keys()}
+
+        for obj_id in active_ids:
+            items = self._point_items_for_obj(obj_id)
+            obj_points = points_by_object.get(obj_id, {})
+            items["positive"].setData(pos=obj_points.get("positive") or [])
+            items["negative"].setData(pos=obj_points.get("negative") or [])
+
+        # Clear stale object markers when they are not present on the frame.
+        for obj_id, items in self._point_items.items():
+            if obj_id in active_ids:
+                continue
+            items["positive"].setData(pos=[])
+            items["negative"].setData(pos=[])
+
         self.view.update()
 
     def set_points_visible(self, visible):
-        self._pos_scatter.setVisible(bool(visible))
-        self._neg_scatter.setVisible(bool(visible))
+        self._points_visible = bool(visible)
+        for items in self._point_items.values():
+            items["positive"].setVisible(self._points_visible)
+            items["negative"].setVisible(self._points_visible)
         self.view.update()
 
     def set_mask(self, mask_2d):
@@ -108,8 +165,11 @@ class ImageView(pg.ImageView):
         if mask_2d is None:
             self._mask_item.clear()
         else:
-            # Multiply by 1 so value 1 stays at LUT index 1 with levels (0, 255)
-            self._mask_item.setImage(mask_2d.astype(np.uint8), autoLevels=False, levels=(0, 255))
+            # Keep label values as direct LUT indices (0..255) so obj_id maps to lut[obj_id].
+            mask_u8 = np.clip(mask_2d, 0, 255).astype(np.uint8, copy=False)
+            max_label = int(mask_u8.max()) if mask_u8.size else 0
+            self._set_mask_lut_for_labels(max_label)
+            self._mask_item.setImage(mask_u8, autoLevels=False, levels=(0, 255))
         self.view.update()
 
     def set_mask_visible(self, visible):

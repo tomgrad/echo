@@ -148,44 +148,158 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if not points:
             raise ValueError("No prompt points available for this keyframe.")
 
-        coords = np.array([[p[0], p[1]] for p in points], dtype=np.float32)
+        # UI/image-view coordinates are stored in display order (row, col).
+        # SAM expects prompt coordinates in (x, y) = (col, row).
+        coords = np.array([[p[1], p[0]] for p in points], dtype=np.float32)
         labels = np.array([1 if p[2] else 0 for p in points], dtype=np.int32)
         return coords, labels
 
     @staticmethod
-    def _mask_from_logits(mask_logits) -> np.ndarray:
-        return (mask_logits[0] > 0.0).detach().to("cpu").numpy()[0].astype(np.uint8)
+    def _frame_from_logits(out_obj_ids, out_mask_logits) -> np.ndarray:
+        if len(out_obj_ids) == 0:
+            raise ValueError("No object ids returned for frame reconstruction.")
+
+        first_mask = (out_mask_logits[0] > 0.0).detach().to("cpu").numpy()[0]
+        merged = np.zeros_like(first_mask, dtype=np.uint16)
+        for index, out_obj_id in enumerate(out_obj_ids):
+            obj_mask = (out_mask_logits[index] > 0.0).detach().to("cpu").numpy()[0].astype(bool)
+            out_obj_id = int(out_obj_id)
+            take_obj = obj_mask & ((merged == 0) | (out_obj_id < merged))
+            merged[take_obj] = out_obj_id
+        return merged
+
+    @staticmethod
+    def _binary_mask_for_obj(label_volume: np.ndarray, obj_id: int) -> np.ndarray:
+        return (np.asarray(label_volume) == int(obj_id)).astype(np.uint8)
+
+    def _apply_prompts_on_frame(self, inference_state, frame_idx: int, obj_points: Dict[int, Sequence[Sequence[int]]]):
+        frame_mask = None
+        for obj_id, points in sorted(obj_points.items()):
+            coords, labels = self._prompt_from_points(points)
+            _, out_obj_ids, out_mask_logits = self._predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=int(frame_idx),
+                obj_id=int(obj_id),
+                points=coords,
+                labels=labels,
+            )
+            frame_mask = self._frame_from_logits(out_obj_ids, out_mask_logits)
+
+        if frame_mask is None:
+            raise ValueError(f"No prompts available to apply on frame {frame_idx}.")
+        return frame_mask
+
+    def _segment_multi_object_range(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        start_frame_idx: int,
+        end_frame_idx: int,
+        start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        reverse: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> np.ndarray:
+        if not start_frame_points_by_obj:
+            raise ValueError("At least one object prompt set is required.")
+        if reverse:
+            if start_frame_idx < end_frame_idx:
+                raise ValueError("For backward range, start_frame_idx must be >= end_frame_idx")
+            total_frames = start_frame_idx - end_frame_idx + 1
+            stage = "Propagating backward"
+        else:
+            if end_frame_idx < start_frame_idx:
+                raise ValueError("end_frame_idx must be >= start_frame_idx")
+            total_frames = end_frame_idx - start_frame_idx + 1
+            stage = "Propagating forward"
+
+        prep = self._prepare_volume(pixel_array, dicom_ds)
+        segs_3d = np.zeros((prep.vol_u8.shape[0], prep.height, prep.width), dtype=np.uint16)
+        prompt_items = sorted((int(obj_id), points) for obj_id, points in start_frame_points_by_obj.items() if points)
+        if not prompt_items:
+            raise ValueError("No prompt points available for multi-object propagation.")
+
+        total = len(prompt_items) + total_frames
+        processed = set()
+        if progress_callback is not None:
+            progress_callback(0, total, "Initializing")
+
+        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
+            inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
+            prompt_count = 0
+            for obj_id, points in prompt_items:
+                segs_3d[start_frame_idx] = self._apply_prompts_on_frame(
+                    inference_state,
+                    start_frame_idx,
+                    {obj_id: points},
+                )
+                prompt_count += 1
+                if progress_callback is not None:
+                    progress_callback(prompt_count, total, "Adding object prompts")
+
+            processed.add(start_frame_idx)
+            if progress_callback is not None:
+                progress_callback(prompt_count + len(processed), total, stage)
+
+            for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
+                inference_state,
+                reverse=reverse,
+            ):
+                if reverse:
+                    if out_frame_idx > start_frame_idx:
+                        continue
+                    if out_frame_idx < end_frame_idx:
+                        break
+                else:
+                    if out_frame_idx < start_frame_idx:
+                        continue
+                    if out_frame_idx > end_frame_idx:
+                        break
+
+                segs_3d[out_frame_idx] = self._frame_from_logits(out_obj_ids, out_mask_logits)
+                if out_frame_idx not in processed:
+                    processed.add(out_frame_idx)
+                    if progress_callback is not None:
+                        progress_callback(prompt_count + len(processed), total, stage)
+
+            self._predictor.reset_state(inference_state)
+
+        return segs_3d
 
     def segment_single_keyframe(
         self,
         pixel_array: np.ndarray,
         dicom_ds,
         frame_idx: int,
+        obj_id: int,
         frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        prep = self._prepare_volume(pixel_array, dicom_ds)
-        segs_3d = np.zeros_like(prep.vol_u8, dtype=np.uint8)
-        coords, labels = self._prompt_from_points(frame_points)
-        total = 1
-        if progress_callback is not None:
-            progress_callback(0, total, "Initializing")
+        label_volume = self.segment_single_keyframe_multi_object(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            frame_idx=frame_idx,
+            frame_points_by_obj={int(obj_id): frame_points},
+            progress_callback=progress_callback,
+        )
+        return self._binary_mask_for_obj(label_volume, obj_id)
 
-        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
-            inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
-            _, _, out_mask_logits = self._predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=frame_idx,
-                obj_id=1,
-                points=coords,
-                labels=labels,
-            )
-            segs_3d[frame_idx] = self._mask_from_logits(out_mask_logits)
-            if progress_callback is not None:
-                progress_callback(1, total, "Segmenting")
-            self._predictor.reset_state(inference_state)
-
-        return segs_3d
+    def segment_single_keyframe_multi_object(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        frame_idx: int,
+        frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> np.ndarray:
+        return self._segment_multi_object_range(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=frame_idx,
+            end_frame_idx=frame_idx,
+            start_frame_points_by_obj=frame_points_by_obj,
+            reverse=False,
+            progress_callback=progress_callback,
+        )
 
     def segment_forward_range(
         self,
@@ -193,48 +307,38 @@ class Sam2Segmenter(MedSeg2Segmenter):
         dicom_ds,
         start_frame_idx: int,
         end_frame_idx: int,
+        obj_id: int,
         start_frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        if end_frame_idx < start_frame_idx:
-            raise ValueError("end_frame_idx must be >= start_frame_idx")
+        label_volume = self.segment_forward_range_multi_object(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=start_frame_idx,
+            end_frame_idx=end_frame_idx,
+            start_frame_points_by_obj={int(obj_id): start_frame_points},
+            progress_callback=progress_callback,
+        )
+        return self._binary_mask_for_obj(label_volume, obj_id)
 
-        prep = self._prepare_volume(pixel_array, dicom_ds)
-        segs_3d = np.zeros_like(prep.vol_u8, dtype=np.uint8)
-        coords, labels = self._prompt_from_points(start_frame_points)
-        total = end_frame_idx - start_frame_idx + 1
-        processed = set()
-        if progress_callback is not None:
-            progress_callback(0, total, "Initializing")
-
-        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
-            inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
-            _, _, out_mask_logits = self._predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=start_frame_idx,
-                obj_id=1,
-                points=coords,
-                labels=labels,
-            )
-            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits)
-            processed.add(start_frame_idx)
-            if progress_callback is not None:
-                progress_callback(len(processed), total, "Propagating forward")
-
-            for out_frame_idx, _, out_mask_logits in self._predictor.propagate_in_video(inference_state):
-                if out_frame_idx < start_frame_idx:
-                    continue
-                if out_frame_idx > end_frame_idx:
-                    break
-                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
-                if out_frame_idx not in processed:
-                    processed.add(out_frame_idx)
-                    if progress_callback is not None:
-                        progress_callback(len(processed), total, "Propagating forward")
-
-            self._predictor.reset_state(inference_state)
-
-        return segs_3d
+    def segment_forward_range_multi_object(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        start_frame_idx: int,
+        end_frame_idx: int,
+        start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> np.ndarray:
+        return self._segment_multi_object_range(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=start_frame_idx,
+            end_frame_idx=end_frame_idx,
+            start_frame_points_by_obj=start_frame_points_by_obj,
+            reverse=False,
+            progress_callback=progress_callback,
+        )
 
     def segment_backward_range(
         self,
@@ -242,140 +346,126 @@ class Sam2Segmenter(MedSeg2Segmenter):
         dicom_ds,
         start_frame_idx: int,
         end_frame_idx: int,
+        obj_id: int,
         start_frame_points: Sequence[Sequence[int]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        if start_frame_idx < end_frame_idx:
-            raise ValueError("For backward range, start_frame_idx must be >= end_frame_idx")
+        label_volume = self.segment_backward_range_multi_object(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=start_frame_idx,
+            end_frame_idx=end_frame_idx,
+            start_frame_points_by_obj={int(obj_id): start_frame_points},
+            progress_callback=progress_callback,
+        )
+        return self._binary_mask_for_obj(label_volume, obj_id)
 
-        prep = self._prepare_volume(pixel_array, dicom_ds)
-        segs_3d = np.zeros_like(prep.vol_u8, dtype=np.uint8)
-        coords, labels = self._prompt_from_points(start_frame_points)
-        total = start_frame_idx - end_frame_idx + 1
-        processed = set()
-        if progress_callback is not None:
-            progress_callback(0, total, "Initializing")
-
-        with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
-            inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
-            _, _, out_mask_logits = self._predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=start_frame_idx,
-                obj_id=1,
-                points=coords,
-                labels=labels,
-            )
-            segs_3d[start_frame_idx] = self._mask_from_logits(out_mask_logits)
-            processed.add(start_frame_idx)
-            if progress_callback is not None:
-                progress_callback(len(processed), total, "Propagating backward")
-
-            for out_frame_idx, _, out_mask_logits in self._predictor.propagate_in_video(
-                inference_state, reverse=True
-            ):
-                if out_frame_idx > start_frame_idx:
-                    continue
-                if out_frame_idx < end_frame_idx:
-                    break
-                segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
-                if out_frame_idx not in processed:
-                    processed.add(out_frame_idx)
-                    if progress_callback is not None:
-                        progress_callback(len(processed), total, "Propagating backward")
-
-            self._predictor.reset_state(inference_state)
-
-        return segs_3d
+    def segment_backward_range_multi_object(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        start_frame_idx: int,
+        end_frame_idx: int,
+        start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> np.ndarray:
+        return self._segment_multi_object_range(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=start_frame_idx,
+            end_frame_idx=end_frame_idx,
+            start_frame_points_by_obj=start_frame_points_by_obj,
+            reverse=True,
+            progress_callback=progress_callback,
+        )
 
     def segment_all_with_keyframes(
         self,
         pixel_array: np.ndarray,
         dicom_ds,
         key_frames: Sequence[int],
-        key_frame_points: Dict[int, Sequence[Sequence[int]]],
+        key_frame_points: Dict[int, Dict[int, Sequence[Sequence[int]]]],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         if not key_frames:
             raise ValueError("At least one keyframe is required.")
+        if not key_frame_points:
+            raise ValueError("At least one object prompt set is required.")
 
-        sorted_kf = sorted(set(int(k) for k in key_frames))
         prep = self._prepare_volume(pixel_array, dicom_ds)
         frame_count = prep.vol_u8.shape[0]
-        segs_3d = np.zeros((frame_count, prep.height, prep.width), dtype=np.uint8)
+        segs_3d = np.zeros((frame_count, prep.height, prep.width), dtype=np.uint16)
+        sorted_kf = sorted(set(int(k) for k in key_frames) & set(range(frame_count)))
+        if not sorted_kf:
+            raise ValueError("No keyframes are within frame range.")
+
+        points_by_kf = {frame_idx: {} for frame_idx in sorted_kf}
+        for obj_id, obj_frames in key_frame_points.items():
+            for frame_idx, points in obj_frames.items():
+                frame_idx = int(frame_idx)
+                if frame_idx in points_by_kf and points:
+                    points_by_kf[frame_idx][int(obj_id)] = points
+
+        if not any(points_by_kf[frame_idx] for frame_idx in sorted_kf):
+            raise ValueError("No prompt points available for multi-object propagation.")
+
         processed = set()
         if progress_callback is not None:
             progress_callback(0, frame_count, "Initializing")
 
         with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
-            # Forward segmentation between successive keyframes (and last keyframe to end).
-            for idx, kf in enumerate(sorted_kf):
-                if kf < 0 or kf >= frame_count:
-                    continue
-                points = key_frame_points.get(kf, [])
-                if not points:
+            # Forward propagation from each keyframe to the next keyframe boundary.
+            for idx, frame_idx in enumerate(sorted_kf):
+                obj_points = points_by_kf.get(frame_idx, {})
+                if not obj_points:
                     continue
 
                 next_kf = sorted_kf[idx + 1] if idx + 1 < len(sorted_kf) else frame_count - 1
-                coords, labels = self._prompt_from_points(points)
-
                 inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
-                _, _, out_mask_logits = self._predictor.add_new_points_or_box(
-                    inference_state=inference_state,
-                    frame_idx=kf,
-                    obj_id=1,
-                    points=coords,
-                    labels=labels,
-                )
-                segs_3d[kf] = self._mask_from_logits(out_mask_logits)
-                if kf not in processed:
-                    processed.add(kf)
-                    if progress_callback is not None:
-                        progress_callback(len(processed), frame_count, "Propagating between keyframes")
 
-                for out_frame_idx, _, out_mask_logits in self._predictor.propagate_in_video(inference_state):
-                    if out_frame_idx < kf:
+                segs_3d[frame_idx] = self._apply_prompts_on_frame(inference_state, frame_idx, obj_points)
+
+                if frame_idx not in processed:
+                    processed.add(frame_idx)
+                    if progress_callback is not None:
+                        progress_callback(len(processed), frame_count, "Propagating forward")
+
+                for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
+                    inference_state
+                ):
+                    if out_frame_idx < frame_idx:
                         continue
                     if out_frame_idx > next_kf:
                         break
-                    segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
+                    segs_3d[out_frame_idx] = self._frame_from_logits(out_obj_ids, out_mask_logits)
                     if out_frame_idx not in processed:
                         processed.add(out_frame_idx)
                         if progress_callback is not None:
-                            progress_callback(len(processed), frame_count, "Propagating between keyframes")
+                            progress_callback(len(processed), frame_count, "Propagating forward")
 
                 self._predictor.reset_state(inference_state)
 
             first_kf = sorted_kf[0]
-            # If the first frame is not a keyframe, run reverse propagation from first keyframe.
-            if first_kf > 0:
-                points = key_frame_points.get(first_kf, [])
-                if points:
-                    coords, labels = self._prompt_from_points(points)
-                    inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
-                    _, _, out_mask_logits = self._predictor.add_new_points_or_box(
-                        inference_state=inference_state,
-                        frame_idx=first_kf,
-                        obj_id=1,
-                        points=coords,
-                        labels=labels,
-                    )
-                    segs_3d[first_kf] = self._mask_from_logits(out_mask_logits)
-                    if first_kf not in processed:
-                        processed.add(first_kf)
-                        if progress_callback is not None:
-                            progress_callback(len(processed), frame_count, "Propagating to first frame")
-                    for out_frame_idx, _, out_mask_logits in self._predictor.propagate_in_video(
-                        inference_state,
-                        reverse=True,
-                    ):
-                        if out_frame_idx > first_kf:
-                            continue
-                        segs_3d[out_frame_idx] = self._mask_from_logits(out_mask_logits)
-                        if out_frame_idx not in processed:
-                            processed.add(out_frame_idx)
-                            if progress_callback is not None:
-                                progress_callback(len(processed), frame_count, "Propagating to first frame")
-                    self._predictor.reset_state(inference_state)
+            first_obj_points = points_by_kf.get(first_kf, {})
+            if first_kf > 0 and first_obj_points:
+                inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
+                segs_3d[first_kf] = self._apply_prompts_on_frame(inference_state, first_kf, first_obj_points)
+
+                for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
+                    inference_state,
+                    reverse=True,
+                ):
+                    if out_frame_idx > first_kf:
+                        continue
+                    if out_frame_idx < 0:
+                        break
+                    segs_3d[out_frame_idx] = self._frame_from_logits(out_obj_ids, out_mask_logits)
+                    if out_frame_idx not in processed:
+                        processed.add(out_frame_idx)
+                    if progress_callback is not None:
+                        progress_callback(len(processed), frame_count, "Propagating backward")
+
+                self._predictor.reset_state(inference_state)
 
         return segs_3d
 

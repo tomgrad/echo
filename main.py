@@ -36,7 +36,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.dicom_dataset = None
         self.dicom_file_path = None
         self.key_frames = []
-        # key_frame_points: frame_index -> list of [x, y, positive(bool)]
+        # key_frame_points: obj_id -> frame_index -> list of [x, y, positive(bool)]
         self.key_frame_points = {}
         self.segmentation_mask = None
         self.segmentation_contours = None
@@ -72,6 +72,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segAllButton.clicked.connect(self.segment_all_frames)
         self.fixMasksButton.clicked.connect(self.fix_masks)
         self.contoursButton.clicked.connect(self.find_external_contours)
+        self.objIdSpinBox.valueChanged.connect(self._on_object_id_changed)
         self.hidePointsCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideMasksCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideContoursCheckBox.stateChanged.connect(self._update_overlay_visibility)
@@ -89,6 +90,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def show_status(self, message, timeout_ms=4000):
         self.statusbar.showMessage(message, timeout_ms)
+
+    def _active_obj_id(self):
+        return int(self.objIdSpinBox.value())
+
+    def _on_object_id_changed(self, _value):
+        self.refresh_key_frames_list()
+        self.refresh_point_overlay()
+        self.show_status(f"Active object set to {self._active_obj_id()}", 3000)
 
     def _start_segmentation_progress(self, message):
         self.seg_progress_bar.setRange(0, 100)
@@ -334,7 +343,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if current_frame not in self.key_frames:
             self.key_frames.append(current_frame)
             self.key_frames.sort()
+            self._invalidate_segmentation()
             self.refresh_key_frames_list()
+            self.refresh_point_overlay()
             self.show_status(f"Added key frame: {current_frame}")
         else:
             self.show_status(f"Key frame {current_frame} already exists.")
@@ -350,7 +361,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status("Could not parse selected key frame.")
             return
         self.key_frames.remove(selected_frame)
-        self.key_frame_points.pop(selected_frame, None)
+        for frame_map in self.key_frame_points.values():
+            frame_map.pop(selected_frame, None)
+        self._invalidate_segmentation()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
         self.show_status(f"Deleted key frame: {selected_frame}")
@@ -363,6 +376,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         count = len(self.key_frames)
         self.key_frames.clear()
         self.key_frame_points.clear()
+        self._invalidate_segmentation()
         self.keyFramesListView.clearSelection()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
@@ -370,37 +384,51 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def on_point_clicked(self, x, y, action):
         frame = self.imageView.currentIndex
+        obj_id = self._active_obj_id()
         if frame not in self.key_frames:
             self.show_status("Current frame is not a key frame.")
             return
 
+        changed = False
         if action == "delete":
-            self._remove_nearest_point(frame, x, y)
+            changed = self._remove_nearest_point(frame, obj_id, x, y)
         else:
             positive = (action == "positive")
-            self.key_frame_points.setdefault(frame, []).append([x, y, positive])
+            self.key_frame_points.setdefault(obj_id, {}).setdefault(frame, []).append([x, y, positive])
             point_type = "positive" if positive else "negative"
-            self.show_status(f"Added {point_type} point at ({x}, {y}) on frame {frame}")
+            self.show_status(f"Added {point_type} point for object {obj_id} at ({x}, {y}) on frame {frame}")
+            changed = True
 
+        if changed:
+            self._invalidate_segmentation()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
 
-    def _remove_nearest_point(self, frame, x, y):
-        points = self.key_frame_points.get(frame, [])
+    def _remove_nearest_point(self, frame, obj_id, x, y):
+        points = self.key_frame_points.get(obj_id, {}).get(frame, [])
         if not points:
-            self.show_status("No points to remove on this key frame.")
-            return
+            self.show_status(f"No points to remove for object {obj_id} on this key frame.")
+            return False
         closest = min(points, key=lambda p: (p[0] - x) ** 2 + (p[1] - y) ** 2)
         points.remove(closest)
-        self.show_status(f"Removed point at ({closest[0]}, {closest[1]}) from frame {frame}")
+        self.show_status(
+            f"Removed object {obj_id} point at ({closest[0]}, {closest[1]}) from frame {frame}"
+        )
+        return True
 
     def refresh_point_overlay(self, frame=None):
         if frame is None:
             frame = self.imageView.currentIndex
-        points = self.key_frame_points.get(frame, [])
-        pos_pts = [(p[0], p[1]) for p in points if p[2]]
-        neg_pts = [(p[0], p[1]) for p in points if not p[2]]
-        self.imageView.set_points(pos_pts, neg_pts)
+        points_by_object = {}
+        for obj_id, frame_map in self.key_frame_points.items():
+            points = frame_map.get(frame, [])
+            if not points:
+                continue
+            points_by_object[obj_id] = {
+                "positive": [(p[0], p[1]) for p in points if p[2]],
+                "negative": [(p[0], p[1]) for p in points if not p[2]],
+            }
+        self.imageView.set_points_by_object(points_by_object)
         frame_mask = None
         if self.segmentation_mask is not None and 0 <= frame < self.segmentation_mask.shape[0]:
             frame_mask = self.segmentation_mask[frame]
@@ -480,12 +508,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.show_status(f"Showing key frame: {frame_index}")
 
     def refresh_key_frames_list(self):
+        active_obj = self._active_obj_id()
         labels = []
         for frame in self.key_frames:
-            points = self.key_frame_points.get(frame, [])
-            positives = sum(1 for p in points if p[2])
-            negatives = sum(1 for p in points if not p[2])
-            labels.append(f"{frame} ({positives} / {negatives})")
+            all_points = []
+            for frame_map in self.key_frame_points.values():
+                all_points.extend(frame_map.get(frame, []))
+            active_points = self.key_frame_points.get(active_obj, {}).get(frame, [])
+
+            pos_all = sum(1 for p in all_points if p[2])
+            neg_all = sum(1 for p in all_points if not p[2])
+            pos_active = sum(1 for p in active_points if p[2])
+            neg_active = sum(1 for p in active_points if not p[2])
+            labels.append(
+                f"{frame} (obj {active_obj}: {pos_active}/{neg_active}, all: {pos_all}/{neg_all})"
+            )
         self.key_frames_model.setStringList(labels)
 
     def _frame_from_list_index(self, model_index):
@@ -511,12 +548,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         root = ET.Element("keyframes")
         for frame_idx in self.key_frames:
             kf_el = ET.SubElement(root, "keyframe", index=str(frame_idx))
-            for pt in self.key_frame_points.get(frame_idx, []):
-                ET.SubElement(
-                    kf_el, "point",
-                    x=str(pt[0]), y=str(pt[1]),
-                    positive=("true" if pt[2] else "false"),
-                )
+            for obj_id, frame_map in self.key_frame_points.items():
+                for pt in frame_map.get(frame_idx, []):
+                    ET.SubElement(
+                        kf_el, "point",
+                        x=str(pt[0]), y=str(pt[1]),
+                        positive=("true" if pt[2] else "false"),
+                        obj_id=str(obj_id),
+                    )
         tree = ET.ElementTree(root)
         ET.indent(tree, space="  ")
         tree.write(path, encoding="unicode", xml_declaration=True)
@@ -533,25 +572,34 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except ET.ParseError as exc:
             QMessageBox.critical(self, "Load error", f"Could not parse file:\n{exc}")
             return
-        root = tree.getroot()
-        if root.tag != "keyframes":
-            QMessageBox.critical(self, "Load error", "Not a valid key frames file.")
+        try:
+            root = tree.getroot()
+            if root.tag != "keyframes":
+                raise ValueError("Not a valid key frames file.")
+            self.key_frames.clear()
+            self.key_frame_points.clear()
+            for kf_el in root.findall("keyframe"):
+                frame_idx = int(kf_el.get("index"))
+                if frame_idx not in self.key_frames:
+                    self.key_frames.append(frame_idx)
+                for pt_el in kf_el.findall("point"):
+                    x = pt_el.get("x")
+                    y = pt_el.get("y")
+                    positive = pt_el.get("positive")
+                    obj_id = pt_el.get("obj_id")
+                    if x is None or y is None or positive is None or obj_id is None:
+                        raise ValueError(
+                            "Invalid keyframe file: each point must include x, y, positive, and obj_id"
+                        )
+                    self.key_frame_points.setdefault(int(obj_id), {}).setdefault(frame_idx, []).append([
+                        int(x),
+                        int(y),
+                        positive == "true",
+                    ])
+        except (TypeError, ValueError) as exc:
+            QMessageBox.critical(self, "Load error", f"Could not load key frames:\n{exc}")
             return
-        self.key_frames.clear()
-        self.key_frame_points.clear()
-        for kf_el in root.findall("keyframe"):
-            frame_idx = int(kf_el.get("index"))
-            if frame_idx not in self.key_frames:
-                self.key_frames.append(frame_idx)
-            pts = []
-            for pt_el in kf_el.findall("point"):
-                pts.append([
-                    int(pt_el.get("x")),
-                    int(pt_el.get("y")),
-                    pt_el.get("positive") == "true",
-                ])
-            if pts:
-                self.key_frame_points.setdefault(frame_idx, []).extend(pts)
+        self._invalidate_segmentation()
         self.key_frames.sort()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
@@ -571,7 +619,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{dicom_stem}_mask.npy"
 
-        np.save(output_path, self.segmentation_mask.astype(np.uint8))
+        np.save(output_path, self.segmentation_mask.astype(np.uint16))
         self.show_status(f"Saved masks to {output_path}", 6000)
 
     def _ensure_segmenter(self):
@@ -603,12 +651,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return False
         return True
 
-    def _validate_points_for_frame(self, frame_idx):
-        points = self.key_frame_points.get(frame_idx, [])
-        if not points:
-            self.show_status(f"Key frame {frame_idx} has no prompt points.")
-            return None
-        return points
+    def _invalidate_segmentation(self):
+        self.segmentation_mask = None
+        self.segmentation_contours = None
+
+    def _points_by_object_for_frame(self, frame_idx):
+        return {
+            int(obj_id): points
+            for obj_id, frame_map in self.key_frame_points.items()
+            for points in [frame_map.get(frame_idx, [])]
+            if points
+        }
 
     def _selected_key_frame(self):
         selected_indexes = self.keyFramesListView.selectedIndexes()
@@ -616,11 +669,58 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return None
         return self._frame_from_list_index(selected_indexes[0])
 
-    def _merge_mask(self, new_mask, start_frame, end_frame):
-        """Copy frames [start_frame, end_frame] from new_mask into the existing mask."""
+    def _require_selected_keyframe_with_points(self, missing_selection_message):
+        frame_idx = self._selected_key_frame()
+        if frame_idx is None:
+            self.show_status(missing_selection_message)
+            return None, None
+
+        points_by_object = self._points_by_object_for_frame(frame_idx)
+        if not points_by_object:
+            self.show_status(f"Key frame {frame_idx} has no prompt points for any object.")
+            return None, None
+
+        return frame_idx, points_by_object
+
+    def _finalize_segmentation_result(self, mask, start_frame, end_frame, obj_ids):
+        if mask is None:
+            return False
+
+        self._merge_multi_object_mask(mask, start_frame, end_frame, obj_ids)
+        self.segmentation_contours = None
+        self.refresh_point_overlay()
+        return True
+
+    def _collect_all_object_keyframe_points(self):
+        obj_points = {
+            int(obj_id): frame_map
+            for obj_id, frame_map in self.key_frame_points.items()
+            if any(frame_map.get(frame_idx) for frame_idx in self.key_frames)
+        }
+        missing_points = [
+            frame_idx
+            for frame_idx in sorted(self.key_frames)
+            if not any(frame_map.get(frame_idx) for frame_map in obj_points.values())
+        ]
+        return obj_points, missing_points
+
+    def _merge_multi_object_mask(self, new_mask, start_frame, end_frame, obj_ids):
+        obj_ids = sorted(int(obj_id) for obj_id in obj_ids)
         if self.segmentation_mask is None or self.segmentation_mask.shape != new_mask.shape:
-            self.segmentation_mask = np.zeros_like(new_mask)
-        self.segmentation_mask[start_frame:end_frame + 1] = new_mask[start_frame:end_frame + 1]
+            self.segmentation_mask = np.zeros_like(new_mask, dtype=np.uint16)
+
+        frame_slice = slice(start_frame, end_frame + 1)
+        existing = self.segmentation_mask[frame_slice].copy()
+
+        for obj_id in obj_ids:
+            existing[existing == obj_id] = 0
+
+        for obj_id in obj_ids:
+            incoming = new_mask[frame_slice] == obj_id
+            take_incoming = incoming & ((existing == 0) | (obj_id < existing))
+            existing[take_incoming] = obj_id
+
+        self.segmentation_mask[frame_slice] = existing
 
     @staticmethod
     def _format_segmentation_error(exc, stdout_text="", stderr_text="", traceback_text=""):
@@ -667,42 +767,33 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not self._ensure_ready_for_segmentation():
             return
 
-        frame_idx = self._selected_key_frame()
+        frame_idx, points_by_object = self._require_selected_keyframe_with_points(
+            "Select a key frame for single-frame segmentation."
+        )
         if frame_idx is None:
-            self.show_status("Select a key frame for single-frame segmentation.")
-            return
-        points = self._validate_points_for_frame(frame_idx)
-        if points is None:
             return
 
         mask = self._run_segmentation(
-            "Running single-frame segmentation...",
-            "Single-frame segmentation done. Mask overlay updated.",
-            lambda: self.segmenter.segment_single_keyframe(
+            "Running multi-object single-frame segmentation...",
+            "Single-frame segmentation done for all prompted objects. Mask overlay updated.",
+            lambda: self.segmenter.segment_single_keyframe_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 frame_idx=frame_idx,
-                frame_points=points,
+                frame_points_by_obj=points_by_object,
                 progress_callback=self._update_segmentation_progress,
             )
         )
-        if mask is None:
-            return
-
-        self._merge_mask(mask, frame_idx, frame_idx)
-        self.segmentation_contours = None
-        self.refresh_point_overlay()
+        self._finalize_segmentation_result(mask, frame_idx, frame_idx, points_by_object.keys())
 
     def segment_keyframe_forward(self):
         if not self._ensure_ready_for_segmentation():
             return
 
-        frame_idx = self._selected_key_frame()
+        frame_idx, points_by_object = self._require_selected_keyframe_with_points(
+            "Select a start key frame for forward segmentation."
+        )
         if frame_idx is None:
-            self.show_status("Select a start key frame for forward segmentation.")
-            return
-        points = self._validate_points_for_frame(frame_idx)
-        if points is None:
             return
 
         sorted_kf = sorted(set(self.key_frames))
@@ -714,34 +805,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         )
 
         mask = self._run_segmentation(
-            "Running forward range segmentation...",
-            f"Forward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated.",
-            lambda: self.segmenter.segment_forward_range(
+            "Running multi-object forward range segmentation...",
+            f"Forward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
+            lambda: self.segmenter.segment_forward_range_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
-                start_frame_points=points,
+                start_frame_points_by_obj=points_by_object,
                 progress_callback=self._update_segmentation_progress,
             )
         )
-        if mask is None:
-            return
-
-        self._merge_mask(mask, frame_idx, end_frame)
-        self.segmentation_contours = None
-        self.refresh_point_overlay()
+        self._finalize_segmentation_result(mask, frame_idx, end_frame, points_by_object.keys())
 
     def segment_keyframe_backward(self):
         if not self._ensure_ready_for_segmentation():
             return
 
-        frame_idx = self._selected_key_frame()
+        frame_idx, points_by_object = self._require_selected_keyframe_with_points(
+            "Select a start key frame for backward segmentation."
+        )
         if frame_idx is None:
-            self.show_status("Select a start key frame for backward segmentation.")
-            return
-        points = self._validate_points_for_frame(frame_idx)
-        if points is None:
             return
 
         sorted_kf = sorted(set(self.key_frames))
@@ -753,50 +837,43 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         )
 
         mask = self._run_segmentation(
-            "Running backward range segmentation...",
-            f"Backward segmentation done ({frame_idx}->{end_frame}). Mask overlay updated.",
-            lambda: self.segmenter.segment_backward_range(
+            "Running multi-object backward range segmentation...",
+            f"Backward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
+            lambda: self.segmenter.segment_backward_range_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
-                start_frame_points=points,
+                start_frame_points_by_obj=points_by_object,
                 progress_callback=self._update_segmentation_progress,
             )
         )
-        if mask is None:
-            return
-
-        self._merge_mask(mask, end_frame, frame_idx)
-        self.segmentation_contours = None
-        self.refresh_point_overlay()
+        self._finalize_segmentation_result(mask, end_frame, frame_idx, points_by_object.keys())
 
     def segment_all_frames(self):
         if not self._ensure_ready_for_segmentation():
             return
 
-        missing_points = [f for f in sorted(self.key_frames) if not self.key_frame_points.get(f)]
+        obj_points, missing_points = self._collect_all_object_keyframe_points()
+        if not obj_points:
+            self.show_status("Add prompt points for at least one object before all-frames segmentation.")
+            return
         if missing_points:
-            self.show_status(f"These key frames have no points: {missing_points}")
+            self.show_status(f"These key frames have no points for any object: {missing_points}")
             return
 
         mask = self._run_segmentation(
-            "Running all-frames segmentation...",
-            "All-frame segmentation done. Mask overlay updated.",
+            "Running all-object segmentation...",
+            "All-object segmentation done. Mask overlay updated.",
             lambda: self.segmenter.segment_all_with_keyframes(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 key_frames=self.key_frames,
-                key_frame_points=self.key_frame_points,
+                key_frame_points=obj_points,
                 progress_callback=self._update_segmentation_progress,
             )
         )
-        if mask is None:
-            return
-
-        self.segmentation_mask = mask
-        self.segmentation_contours = None
-        self.refresh_point_overlay()
+        self._finalize_segmentation_result(mask, 0, self._frame_count() - 1, obj_points.keys())
 
     def fix_masks(self):
         if self.segmentation_mask is None:
@@ -813,17 +890,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             fixed = ndimage.binary_dilation(fixed, iterations=iterations)
             return fixed.astype(np.uint8)
 
-        mask = self.segmentation_mask.astype(bool)
+        mask = self.segmentation_mask.astype(np.uint16)
+        obj_ids = [int(v) for v in np.unique(mask) if int(v) > 0]
+
         if mask.ndim == 2:
-            self._update_segmentation_progress(0, 1, "Fixing masks")
-            fixed_mask = _fix_single_mask(mask)
-            self._update_segmentation_progress(1, 1, "Fixing masks")
+            fixed_mask = np.zeros_like(mask, dtype=np.uint16)
+            total = max(1, len(obj_ids))
+            self._update_segmentation_progress(0, total, "Fixing masks")
+            for idx, obj_id in enumerate(obj_ids, start=1):
+                obj_fixed = _fix_single_mask(mask == obj_id).astype(bool)
+                write_here = obj_fixed & ((fixed_mask == 0) | (obj_id < fixed_mask))
+                fixed_mask[write_here] = obj_id
+                self._update_segmentation_progress(idx, total, "Fixing masks")
         elif mask.ndim == 3:
-            fixed_mask = np.zeros_like(self.segmentation_mask, dtype=np.uint8)
-            total = mask.shape[0]
+            fixed_mask = np.zeros_like(mask, dtype=np.uint16)
+            total = mask.shape[0] * max(1, len(obj_ids))
+            done = 0
             for frame_idx in range(mask.shape[0]):
-                fixed_mask[frame_idx] = _fix_single_mask(mask[frame_idx])
-                self._update_segmentation_progress(frame_idx + 1, total, "Fixing masks")
+                for obj_id in obj_ids:
+                    obj_fixed = _fix_single_mask(mask[frame_idx] == obj_id).astype(bool)
+                    frame_out = fixed_mask[frame_idx]
+                    write_here = obj_fixed & ((frame_out == 0) | (obj_id < frame_out))
+                    frame_out[write_here] = obj_id
+                    fixed_mask[frame_idx] = frame_out
+                    done += 1
+                    self._update_segmentation_progress(done, total, "Fixing masks")
         else:
             self.seg_progress_bar.setVisible(False)
             self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
