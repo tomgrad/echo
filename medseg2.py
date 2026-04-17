@@ -80,10 +80,12 @@ class Sam2Segmenter(MedSeg2Segmenter):
         super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
 
     def _create_predictor(self):
+        hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
         return self._build_sam2_video_predictor_npz(
             self.model_cfg,
             self.checkpoint_path,
             device="cuda",
+            hydra_overrides_extra=hydra_overrides_extra,
         )
 
     @staticmethod

@@ -16,7 +16,10 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBo
 from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from ui_mainwindow import Ui_MainWindow
 
-FRAMES_LIMIT = 100  # Max frames to load from a DICOM (for testing)
+FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing)
+# For long studies, SAM2 at 1024 can exceed VRAM because preprocessing moves all
+# frames to CUDA at once. Keeping SAM2 at 512 is a practical high-frame workaround.
+SAM2_MAX_IMAGE_SIZE = 512
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -190,14 +193,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     @staticmethod
     def _sam2_config_candidate_for_variant(variant):
-        # Requested SAM2 config family: sam2.1_hiera_{t|s|b+}.yaml
-        if variant == "s":
-            suffix = "s"
-        elif variant == "b+":
-            suffix = "b+"
-        else:
-            suffix = "t"
-        return f"configs/sam2.1_hiera_{suffix}.yaml"
+        # Official SAM2 configs live under configs/sam2.1/.
+        variant_to_suffix = {
+            "t": "t",
+            "s": "s",
+            "b+": "b+",
+            "l": "l",
+        }
+        suffix = variant_to_suffix.get(variant, "t")
+        return f"configs/sam2.1/sam2.1_hiera_{suffix}.yaml"
 
     @classmethod
     def _sam2_config_exists(cls, config_rel_path):
@@ -270,7 +274,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _create_segmenter_for_selection(self, engine_key, checkpoint_path):
         model_cfg = self._model_cfg_for_selection(engine_key, checkpoint_path)
         if engine_key == "sam2":
-            image_size = self._image_size_for_model_cfg(model_cfg)
+            image_size = min(self._image_size_for_model_cfg(model_cfg), SAM2_MAX_IMAGE_SIZE)
             return Sam2Segmenter(
                 checkpoint_path=str(checkpoint_path),
                 model_cfg=model_cfg,
@@ -284,8 +288,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             image_size=image_size,
         )
 
-    def _on_engine_changed(self, _index=None):
+    def _release_segmenter(self):
+        if self.segmenter is None:
+            return
         self.segmenter = None
+
+    def _on_engine_changed(self, _index=None):
+        self._release_segmenter()
         self._populate_checkpoints_combo()
         self.show_status(f"Selected engine: {self._current_engine_name()}", 4000)
 
@@ -327,12 +336,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _on_checkpoint_changed(self, _index=None, emit_status=True):
         checkpoint_path = self._selected_checkpoint_path()
-        self.segmenter = None
+        self._release_segmenter()
         if emit_status and checkpoint_path is not None:
             self.show_status(
                 f"Selected {self._current_engine_name()} checkpoint: {checkpoint_path.name}",
                 4000,
             )
+
+    def closeEvent(self, event):
+        self.stop_playback()
+        self._release_segmenter()
+        super().closeEvent(event)
 
     def add_key_frame(self):
         if self.pixel_array is None:
