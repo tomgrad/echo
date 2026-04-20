@@ -27,7 +27,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(1112, 790)
+        MainWindow.resize(1112, 868)
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.horizontalLayout = QHBoxLayout(self.centralwidget)
@@ -147,6 +147,16 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.lineWidthSpinBox, 3, 1, 1, 1)
 
+        self.hideSplinesCheckBox = QCheckBox(self.groupBox_4)
+        self.hideSplinesCheckBox.setObjectName(u"hideSplinesCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideSplinesCheckBox, 5, 2, 1, 1)
+
+        self.hideNodesCheckBox = QCheckBox(self.groupBox_4)
+        self.hideNodesCheckBox.setObjectName(u"hideNodesCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideNodesCheckBox, 6, 2, 1, 1)
+
 
         self.verticalLayout.addWidget(self.groupBox_4)
 
@@ -216,22 +226,17 @@ class Ui_MainWindow(object):
         self.groupBox_5.setObjectName(u"groupBox_5")
         self.gridLayout_5 = QGridLayout(self.groupBox_5)
         self.gridLayout_5.setObjectName(u"gridLayout_5")
-        self.fixMasksButton = QPushButton(self.groupBox_5)
-        self.fixMasksButton.setObjectName(u"fixMasksButton")
-
-        self.gridLayout_5.addWidget(self.fixMasksButton, 0, 0, 1, 1)
-
-        self.label_2 = QLabel(self.groupBox_5)
-        self.label_2.setObjectName(u"label_2")
-
-        self.gridLayout_5.addWidget(self.label_2, 0, 2, 1, 1)
-
         self.smoothSpinBox = QSpinBox(self.groupBox_5)
         self.smoothSpinBox.setObjectName(u"smoothSpinBox")
         self.smoothSpinBox.setMaximum(50)
         self.smoothSpinBox.setValue(5)
 
         self.gridLayout_5.addWidget(self.smoothSpinBox, 0, 1, 1, 1)
+
+        self.label_4 = QLabel(self.groupBox_5)
+        self.label_4.setObjectName(u"label_4")
+
+        self.gridLayout_5.addWidget(self.label_4, 1, 2, 1, 1)
 
         self.contoursButton = QPushButton(self.groupBox_5)
         self.contoursButton.setObjectName(u"contoursButton")
@@ -246,10 +251,33 @@ class Ui_MainWindow(object):
 
         self.gridLayout_5.addWidget(self.epsilonSpinBox, 1, 1, 1, 1)
 
-        self.label_4 = QLabel(self.groupBox_5)
-        self.label_4.setObjectName(u"label_4")
+        self.fixMasksButton = QPushButton(self.groupBox_5)
+        self.fixMasksButton.setObjectName(u"fixMasksButton")
 
-        self.gridLayout_5.addWidget(self.label_4, 1, 2, 1, 1)
+        self.gridLayout_5.addWidget(self.fixMasksButton, 0, 0, 1, 1)
+
+        self.label_2 = QLabel(self.groupBox_5)
+        self.label_2.setObjectName(u"label_2")
+
+        self.gridLayout_5.addWidget(self.label_2, 0, 2, 1, 1)
+
+        self.splinesButton = QPushButton(self.groupBox_5)
+        self.splinesButton.setObjectName(u"splinesButton")
+
+        self.gridLayout_5.addWidget(self.splinesButton, 2, 0, 1, 1)
+
+        self.splineNodesSpinBox = QSpinBox(self.groupBox_5)
+        self.splineNodesSpinBox.setObjectName(u"splineNodesSpinBox")
+        self.splineNodesSpinBox.setMinimum(4)
+        self.splineNodesSpinBox.setMaximum(50)
+        self.splineNodesSpinBox.setValue(10)
+
+        self.gridLayout_5.addWidget(self.splineNodesSpinBox, 2, 1, 1, 1)
+
+        self.label_5 = QLabel(self.groupBox_5)
+        self.label_5.setObjectName(u"label_5")
+
+        self.gridLayout_5.addWidget(self.label_5, 2, 2, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox_5)
@@ -296,6 +324,8 @@ class Ui_MainWindow(object):
         self.hideframesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide frames", None))
         self.hideMasksCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide masks", None))
         self.label.setText(QCoreApplication.translate("MainWindow", u"fps", None))
+        self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
+        self.hideNodesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide nodes", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
 #if QT_CONFIG(tooltip)
         self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
@@ -327,9 +357,11 @@ class Ui_MainWindow(object):
 #endif // QT_CONFIG(tooltip)
         self.segAllButton.setText(QCoreApplication.translate("MainWindow", u"\u2194\ufe0f all", None))
         self.groupBox_5.setTitle(QCoreApplication.translate("MainWindow", u"Masks", None))
+        self.label_4.setText(QCoreApplication.translate("MainWindow", u"approx epsilon", None))
+        self.contoursButton.setText(QCoreApplication.translate("MainWindow", u"Get contours", None))
         self.fixMasksButton.setText(QCoreApplication.translate("MainWindow", u"Fix masks", None))
         self.label_2.setText(QCoreApplication.translate("MainWindow", u"smooth level", None))
-        self.contoursButton.setText(QCoreApplication.translate("MainWindow", u"Get contours", None))
-        self.label_4.setText(QCoreApplication.translate("MainWindow", u"approx epsilon", None))
+        self.splinesButton.setText(QCoreApplication.translate("MainWindow", u"Get splines", None))
+        self.label_5.setText(QCoreApplication.translate("MainWindow", u"control points", None))
     # retranslateUi
 

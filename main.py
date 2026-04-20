@@ -8,12 +8,11 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import numpy as np
 import pydicom
-import cv2
-from scipy import ndimage
 from PySide6.QtCore import QStringListModel, QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
 from medseg2 import MedSam2Segmenter, Sam2Segmenter
+from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
 from ui_mainwindow import Ui_MainWindow
 
 FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing)
@@ -43,6 +42,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.key_frame_points = {}
         self.segmentation_mask = None
         self.segmentation_contours = None
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
         self.segmenter = None
         self.key_frames_model = QStringListModel(self)
         self.keyFramesListView.setModel(self.key_frames_model)
@@ -75,10 +76,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segAllButton.clicked.connect(self.segment_all_frames)
         self.fixMasksButton.clicked.connect(self.fix_masks)
         self.contoursButton.clicked.connect(self.find_external_contours)
+        self.splinesButton.clicked.connect(self.fit_contour_splines)
         self.objIdSpinBox.valueChanged.connect(self._on_object_id_changed)
         self.hidePointsCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideMasksCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideContoursCheckBox.stateChanged.connect(self._update_overlay_visibility)
+        self.hideSplinesCheckBox.stateChanged.connect(self._update_overlay_visibility)
+        self.hideNodesCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideframesCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideHistogramCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
@@ -451,16 +455,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.segmentation_contours is not None:
             frame_contours = self.segmentation_contours.get(frame, [])
         self.imageView.set_contours(frame_contours)
+        frame_splines = []
+        if self.segmentation_splines is not None:
+            frame_splines = self.segmentation_splines.get(frame, [])
+        self.imageView.set_splines(frame_splines)
+        frame_nodes = []
+        if self.segmentation_spline_nodes is not None:
+            frame_nodes = self.segmentation_spline_nodes.get(frame, [])
+        self.imageView.set_spline_nodes(frame_nodes)
 
     def _update_overlay_visibility(self):
         show_points = not self.hidePointsCheckBox.isChecked()
         show_masks = not self.hideMasksCheckBox.isChecked()
         show_contours = not self.hideContoursCheckBox.isChecked()
+        show_splines = not self.hideSplinesCheckBox.isChecked()
+        show_nodes = not self.hideNodesCheckBox.isChecked()
         show_frames = not self.hideframesCheckBox.isChecked()
         show_histogram = not self.hideHistogramCheckBox.isChecked()
         self.imageView.set_points_visible(show_points)
         self.imageView.set_mask_visible(show_masks)
         self.imageView.set_contours_visible(show_contours)
+        self.imageView.set_splines_visible(show_splines)
+        self.imageView.set_spline_nodes_visible(show_nodes)
         self.imageView.set_frame_visible(show_frames)
         self.imageView.set_histogram_visible(show_histogram)
 
@@ -475,6 +491,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _update_contour_width(self, width):
         self.imageView.set_contour_width(int(width))
+        self.imageView.set_spline_width(int(width))
 
     def toggle_playback(self):
         if self.is_playing:
@@ -668,6 +685,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _invalidate_segmentation(self):
         self.segmentation_mask = None
         self.segmentation_contours = None
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
 
     def _points_by_object_for_frame(self, frame_idx):
         return {
@@ -702,6 +721,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self._merge_multi_object_mask(mask, start_frame, end_frame, obj_ids)
         self.segmentation_contours = None
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
         self.refresh_point_overlay()
         return True
 
@@ -897,45 +918,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         iterations = int(self.smoothSpinBox.value())
         self._start_segmentation_progress("Fixing masks...")
 
-        def _fix_single_mask(mask_2d):
-            # 1) fill holes, 2) erode, 3) dilate
-            fixed = ndimage.binary_fill_holes(mask_2d)
-            fixed = ndimage.binary_erosion(fixed, iterations=iterations)
-            fixed = ndimage.binary_dilation(fixed, iterations=iterations)
-            return fixed.astype(np.uint8)
-
-        mask = self.segmentation_mask.astype(np.uint16)
-        obj_ids = [int(v) for v in np.unique(mask) if int(v) > 0]
-
-        if mask.ndim == 2:
-            fixed_mask = np.zeros_like(mask, dtype=np.uint16)
-            total = max(1, len(obj_ids))
-            self._update_segmentation_progress(0, total, "Fixing masks")
-            for idx, obj_id in enumerate(obj_ids, start=1):
-                obj_fixed = _fix_single_mask(mask == obj_id).astype(bool)
-                write_here = obj_fixed & ((fixed_mask == 0) | (obj_id < fixed_mask))
-                fixed_mask[write_here] = obj_id
-                self._update_segmentation_progress(idx, total, "Fixing masks")
-        elif mask.ndim == 3:
-            fixed_mask = np.zeros_like(mask, dtype=np.uint16)
-            total = mask.shape[0] * max(1, len(obj_ids))
-            done = 0
-            for frame_idx in range(mask.shape[0]):
-                for obj_id in obj_ids:
-                    obj_fixed = _fix_single_mask(mask[frame_idx] == obj_id).astype(bool)
-                    frame_out = fixed_mask[frame_idx]
-                    write_here = obj_fixed & ((frame_out == 0) | (obj_id < frame_out))
-                    frame_out[write_here] = obj_id
-                    fixed_mask[frame_idx] = frame_out
-                    done += 1
-                    self._update_segmentation_progress(done, total, "Fixing masks")
-        else:
+        try:
+            fixed_mask = fix_labeled_mask(
+                self.segmentation_mask,
+                iterations,
+                progress_callback=lambda done, total: self._update_segmentation_progress(done, total, "Fixing masks"),
+            )
+        except ValueError:
             self.seg_progress_bar.setVisible(False)
             self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
             return
 
         self.segmentation_mask = fixed_mask
         self.segmentation_contours = None
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
         self.refresh_point_overlay()
         self._finish_segmentation_progress(f"Mask fixing complete (smooth level: {iterations}).")
 
@@ -944,34 +941,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status("No segmentation mask available. Run segmentation first.")
             return
 
-        mask = self.segmentation_mask.astype(np.uint8)
-        contour_map = {}
         epsilon = float(self.epsilonSpinBox.value())
         use_approx = epsilon > 0.0
 
-        def _extract_from_frame(mask_2d):
-            frame_mask = (mask_2d > 0).astype(np.uint8)
-            found = cv2.findContours(frame_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-            contours = found[0] if len(found) == 2 else found[1]
-            out = []
-            for contour in contours:
-                if use_approx:
-                    contour = cv2.approxPolyDP(contour, epsilon, True)
-                pts = contour.reshape(-1, 2)
-                if pts.shape[0] > 1:
-                    out.append(pts)
-            return out
-
-        if mask.ndim == 2:
-            contour_map[0] = _extract_from_frame(mask)
-        elif mask.ndim == 3:
-            for frame_idx in range(mask.shape[0]):
-                contour_map[frame_idx] = _extract_from_frame(mask[frame_idx])
-        else:
+        try:
+            contour_map = find_external_contours(self.segmentation_mask, epsilon=epsilon)
+        except ValueError:
             self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
             return
 
         self.segmentation_contours = contour_map
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
         color = (255, 255, 0, 255)
         self.imageView.set_contour_color(color)
         self.refresh_point_overlay()
@@ -979,6 +960,36 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status(f"External contours extracted (approxPolyDP, epsilon={epsilon:g}).", 5000)
         else:
             self.show_status("External contours extracted (no approximation).", 5000)
+
+    def fit_contour_splines(self):
+        if self.segmentation_mask is None and self.segmentation_contours is None:
+            self.show_status("No segmentation mask available. Run segmentation first.")
+            return
+
+        if self.segmentation_contours is None:
+            try:
+                epsilon = float(self.epsilonSpinBox.value())
+                self.segmentation_contours = find_external_contours(self.segmentation_mask, epsilon=epsilon)
+            except ValueError:
+                self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
+                return
+
+        num_control_points = int(self.splineNodesSpinBox.value())
+        try:
+            self.segmentation_splines, self.segmentation_spline_nodes = fit_spline_contours(
+                self.segmentation_contours,
+                num_control_points=num_control_points,
+                num_samples=num_control_points * 10,
+                return_nodes=True,
+            )
+        except ValueError as exc:
+            self.show_status(str(exc))
+            return
+
+        self.imageView.set_spline_color((0, 255, 255, 255))
+        self.imageView.set_spline_nodes_color((255, 80, 80, 255))
+        self.refresh_point_overlay()
+        self.show_status(f"Spline fitting complete (control points: {num_control_points}).", 5000)
 
     def open_dicom_file(self):
         file_dialog = QFileDialog(self)
@@ -996,10 +1007,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.pixel_array = pixel_array
                 self.segmentation_mask = None
                 self.segmentation_contours = None
+                self.segmentation_splines = None
+                self.segmentation_spline_nodes = None
                 self.stop_playback()
                 self.imageView.setImage(self.pixel_array)
                 self.imageView.set_mask(None)
                 self.imageView.set_contours([])
+                self.imageView.set_splines([])
+                self.imageView.set_spline_nodes([])
                 self.key_frames.clear()
                 self.key_frame_points.clear()
                 self.refresh_key_frames_list()

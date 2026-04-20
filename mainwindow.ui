@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1112</width>
-    <height>790</height>
+    <height>868</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -177,6 +177,20 @@
             </property>
            </widget>
           </item>
+          <item row="5" column="2">
+           <widget class="QCheckBox" name="hideSplinesCheckBox">
+            <property name="text">
+             <string>hide splines</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="2">
+           <widget class="QCheckBox" name="hideNodesCheckBox">
+            <property name="text">
+             <string>hide nodes</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -290,20 +304,6 @@
           <string>Masks</string>
          </property>
          <layout class="QGridLayout" name="gridLayout_5">
-          <item row="0" column="0">
-           <widget class="QPushButton" name="fixMasksButton">
-            <property name="text">
-             <string>Fix masks</string>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="2">
-           <widget class="QLabel" name="label_2">
-            <property name="text">
-             <string>smooth level</string>
-            </property>
-           </widget>
-          </item>
           <item row="0" column="1">
            <widget class="QSpinBox" name="smoothSpinBox">
             <property name="maximum">
@@ -311,6 +311,13 @@
             </property>
             <property name="value">
              <number>5</number>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QLabel" name="label_4">
+            <property name="text">
+             <string>approx epsilon</string>
             </property>
            </widget>
           </item>
@@ -334,10 +341,44 @@
             </property>
            </widget>
           </item>
-          <item row="1" column="2">
-           <widget class="QLabel" name="label_4">
+          <item row="0" column="0">
+           <widget class="QPushButton" name="fixMasksButton">
             <property name="text">
-             <string>approx epsilon</string>
+             <string>Fix masks</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="2">
+           <widget class="QLabel" name="label_2">
+            <property name="text">
+             <string>smooth level</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QPushButton" name="splinesButton">
+            <property name="text">
+             <string>Get splines</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="splineNodesSpinBox">
+            <property name="minimum">
+             <number>4</number>
+            </property>
+            <property name="maximum">
+             <number>50</number>
+            </property>
+            <property name="value">
+             <number>10</number>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QLabel" name="label_5">
+            <property name="text">
+             <string>control points</string>
             </property>
            </widget>
           </item>

@@ -35,9 +35,27 @@ class ImageView(pg.ImageView):
             pen=pg.mkPen(self._contour_color, width=self._contour_width),
             connect="finite",
         )
+        self._spline_color = (0, 255, 255, 255)
+        self._spline_width = 4
+        self._spline_item = pg.PlotDataItem(
+            pen=pg.mkPen(self._spline_color, width=self._spline_width),
+            connect="finite",
+        )
+        self._spline_nodes_color = (255, 80, 80, 255)
+        self._spline_nodes_item = pg.ScatterPlotItem(
+            symbol='o',
+            size=8,
+            pen=pg.mkPen(self._spline_nodes_color, width=1),
+            brush=pg.mkBrush(self._spline_nodes_color),
+            hoverable=False,
+        )
         self._contour_item.setZValue(20)
+        self._spline_item.setZValue(21)
+        self._spline_nodes_item.setZValue(22)
         self.view.addItem(self._mask_item)
         self.view.addItem(self._contour_item)
+        self.view.addItem(self._spline_item)
+        self.view.addItem(self._spline_nodes_item)
 
         self.view.scene().sigMouseClicked.connect(self._on_scene_click)
         self.ui.roiPlot.scene().sigMouseClicked.connect(self._on_timeline_click)
@@ -207,14 +225,85 @@ class ImageView(pg.ImageView):
         self._contour_item.setVisible(bool(visible))
         self.view.update()
 
+    def set_splines(self, splines):
+        """Display spline curves as polylines over the current frame."""
+        if not splines:
+            self._spline_item.clear()
+            self.view.update()
+            return
+
+        xs = []
+        ys = []
+        for spline in splines:
+            pts = np.asarray(spline)
+            if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
+                continue
+            closed = np.vstack([pts, pts[0]])
+            xs.extend(closed[:, 1].astype(float).tolist())
+            ys.extend(closed[:, 0].astype(float).tolist())
+            xs.append(np.nan)
+            ys.append(np.nan)
+
+        if not xs:
+            self._spline_item.clear()
+        else:
+            self._spline_item.setData(x=xs, y=ys)
+        self.view.update()
+
+    def set_splines_visible(self, visible):
+        self._spline_item.setVisible(bool(visible))
+        self.view.update()
+
+    def set_spline_nodes(self, nodes):
+        """Display spline control nodes over the current frame."""
+        if not nodes:
+            self._spline_nodes_item.setData(pos=[])
+            self.view.update()
+            return
+
+        xs = []
+        ys = []
+        for node_set in nodes:
+            pts = np.asarray(node_set)
+            if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 1:
+                continue
+            xs.extend(pts[:, 1].astype(float).tolist())
+            ys.extend(pts[:, 0].astype(float).tolist())
+
+        if not xs:
+            self._spline_nodes_item.setData(pos=[])
+        else:
+            self._spline_nodes_item.setData(x=xs, y=ys)
+        self.view.update()
+
+    def set_spline_nodes_visible(self, visible):
+        self._spline_nodes_item.setVisible(bool(visible))
+        self.view.update()
+
     def set_contour_color(self, rgba):
         self._contour_color = tuple(rgba)
         self._contour_item.setPen(pg.mkPen(self._contour_color, width=self._contour_width))
         self.view.update()
 
+    def set_spline_color(self, rgba):
+        self._spline_color = tuple(rgba)
+        self._spline_item.setPen(pg.mkPen(self._spline_color, width=self._spline_width))
+        self.view.update()
+
+    def set_spline_nodes_color(self, rgba):
+        self._spline_nodes_color = tuple(rgba)
+        self._spline_nodes_item.setPen(pg.mkPen(self._spline_nodes_color, width=1))
+        self._spline_nodes_item.setBrush(pg.mkBrush(self._spline_nodes_color))
+        self.view.update()
+
     def set_contour_width(self, width):
         self._contour_width = max(1, int(width))
         self._contour_item.setPen(pg.mkPen(self._contour_color, width=self._contour_width))
+        self.view.update()
+
+    def set_spline_width(self, width):
+        self._spline_width = max(1, int(width))
+        self._spline_item.setPen(pg.mkPen(self._spline_color, width=self._spline_width))
         self.view.update()
 
     def set_frame_visible(self, visible):
