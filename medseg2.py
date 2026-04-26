@@ -103,7 +103,12 @@ class Sam2Segmenter(MedSeg2Segmenter):
             center, width = None, None
         return center, width
 
-    def _prepare_volume(self, pixel_array: np.ndarray, dicom_ds) -> PreparedVolume:
+    def _prepare_volume(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
+    ) -> PreparedVolume:
         arr = pixel_array.astype(np.float32)
         if arr.ndim == 2:
             vol = arr[None, ...]
@@ -112,12 +117,8 @@ class Sam2Segmenter(MedSeg2Segmenter):
         else:
             raise ValueError(f"Unsupported pixel_array shape: {arr.shape}")
 
-        wc, ww = self._read_window_from_dicom(dicom_ds)
-        if wc is not None and ww is not None and ww > 1e-6:
-            lo = wc - ww / 2.0
-            hi = wc + ww / 2.0
-        else:
-            lo, hi = np.percentile(vol, [0.5, 99.5])
+        lo_p, hi_p = percentile_clip
+        lo, hi = np.percentile(vol, [float(lo_p), float(hi_p)])
 
         vol_clip = np.clip(vol, lo, hi)
         vol_u8 = (
@@ -198,6 +199,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         start_frame_idx: int,
         end_frame_idx: int,
         start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         reverse: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
@@ -214,7 +216,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             total_frames = end_frame_idx - start_frame_idx + 1
             stage = "Propagating forward"
 
-        prep = self._prepare_volume(pixel_array, dicom_ds)
+        prep = self._prepare_volume(pixel_array, dicom_ds, percentile_clip=percentile_clip)
         segs_3d = np.zeros((prep.vol_u8.shape[0], prep.height, prep.width), dtype=np.uint16)
         prompt_items = sorted((int(obj_id), points) for obj_id, points in start_frame_points_by_obj.items() if points)
         if not prompt_items:
@@ -274,6 +276,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         frame_idx: int,
         obj_id: int,
         frame_points: Sequence[Sequence[int]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         label_volume = self.segment_single_keyframe_multi_object(
@@ -281,6 +284,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             dicom_ds=dicom_ds,
             frame_idx=frame_idx,
             frame_points_by_obj={int(obj_id): frame_points},
+            percentile_clip=percentile_clip,
             progress_callback=progress_callback,
         )
         return self._binary_mask_for_obj(label_volume, obj_id)
@@ -291,6 +295,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         dicom_ds,
         frame_idx: int,
         frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         return self._segment_multi_object_range(
@@ -299,6 +304,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             start_frame_idx=frame_idx,
             end_frame_idx=frame_idx,
             start_frame_points_by_obj=frame_points_by_obj,
+            percentile_clip=percentile_clip,
             reverse=False,
             progress_callback=progress_callback,
         )
@@ -311,6 +317,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         end_frame_idx: int,
         obj_id: int,
         start_frame_points: Sequence[Sequence[int]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         label_volume = self.segment_forward_range_multi_object(
@@ -319,6 +326,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             start_frame_idx=start_frame_idx,
             end_frame_idx=end_frame_idx,
             start_frame_points_by_obj={int(obj_id): start_frame_points},
+            percentile_clip=percentile_clip,
             progress_callback=progress_callback,
         )
         return self._binary_mask_for_obj(label_volume, obj_id)
@@ -330,6 +338,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         start_frame_idx: int,
         end_frame_idx: int,
         start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         return self._segment_multi_object_range(
@@ -338,6 +347,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             start_frame_idx=start_frame_idx,
             end_frame_idx=end_frame_idx,
             start_frame_points_by_obj=start_frame_points_by_obj,
+            percentile_clip=percentile_clip,
             reverse=False,
             progress_callback=progress_callback,
         )
@@ -350,6 +360,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         end_frame_idx: int,
         obj_id: int,
         start_frame_points: Sequence[Sequence[int]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         label_volume = self.segment_backward_range_multi_object(
@@ -358,6 +369,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             start_frame_idx=start_frame_idx,
             end_frame_idx=end_frame_idx,
             start_frame_points_by_obj={int(obj_id): start_frame_points},
+            percentile_clip=percentile_clip,
             progress_callback=progress_callback,
         )
         return self._binary_mask_for_obj(label_volume, obj_id)
@@ -369,6 +381,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         start_frame_idx: int,
         end_frame_idx: int,
         start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         return self._segment_multi_object_range(
@@ -377,6 +390,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
             start_frame_idx=start_frame_idx,
             end_frame_idx=end_frame_idx,
             start_frame_points_by_obj=start_frame_points_by_obj,
+            percentile_clip=percentile_clip,
             reverse=True,
             progress_callback=progress_callback,
         )
@@ -387,6 +401,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         dicom_ds,
         key_frames: Sequence[int],
         key_frame_points: Dict[int, Dict[int, Sequence[Sequence[int]]]],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
         if not key_frames:
@@ -394,7 +409,7 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if not key_frame_points:
             raise ValueError("At least one object prompt set is required.")
 
-        prep = self._prepare_volume(pixel_array, dicom_ds)
+        prep = self._prepare_volume(pixel_array, dicom_ds, percentile_clip=percentile_clip)
         frame_count = prep.vol_u8.shape[0]
         segs_3d = np.zeros((frame_count, prep.height, prep.width), dtype=np.uint16)
         sorted_kf = sorted(set(int(k) for k in key_frames) & set(range(frame_count)))

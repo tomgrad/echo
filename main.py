@@ -15,7 +15,7 @@ from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
 from ui_mainwindow import Ui_MainWindow
 
-FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing)
+FRAMES_LIMIT = 100  # Max frames to load from a DICOM (for testing)
 # For long studies, SAM2 at 1024 can exceed VRAM because preprocessing moves all
 # frames to CUDA at once. Keeping SAM2 at 512 is a practical high-frame workaround.
 SAM2_MAX_IMAGE_SIZE = 512
@@ -493,6 +493,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.imageView.set_contour_width(int(width))
         self.imageView.set_spline_width(int(width))
 
+    def _percentile_clip_from_ui(self):
+        lo = float(self.loClipSpinBox.value())
+        hi = float(self.hiClipSpinBox.value())
+        return lo, hi
+
     def toggle_playback(self):
         if self.is_playing:
             self.stop_playback()
@@ -808,6 +813,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if frame_idx is None:
             return
 
+        percentile_clip = self._percentile_clip_from_ui()
+
         mask = self._run_segmentation(
             "Running multi-object single-frame segmentation...",
             "Single-frame segmentation done for all prompted objects. Mask overlay updated.",
@@ -816,6 +823,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 dicom_ds=self.dicom_dataset,
                 frame_idx=frame_idx,
                 frame_points_by_obj=points_by_object,
+                percentile_clip=percentile_clip,
                 progress_callback=self._update_segmentation_progress,
             )
         )
@@ -839,6 +847,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             else self._frame_count() - 1
         )
 
+        percentile_clip = self._percentile_clip_from_ui()
+
         mask = self._run_segmentation(
             "Running multi-object forward range segmentation...",
             f"Forward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
@@ -848,6 +858,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
                 start_frame_points_by_obj=points_by_object,
+                percentile_clip=percentile_clip,
                 progress_callback=self._update_segmentation_progress,
             )
         )
@@ -871,6 +882,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             else 0
         )
 
+        percentile_clip = self._percentile_clip_from_ui()
+
         mask = self._run_segmentation(
             "Running multi-object backward range segmentation...",
             f"Backward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
@@ -880,6 +893,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
                 start_frame_points_by_obj=points_by_object,
+                percentile_clip=percentile_clip,
                 progress_callback=self._update_segmentation_progress,
             )
         )
@@ -897,6 +911,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status(f"These key frames have no points for any object: {missing_points}")
             return
 
+        percentile_clip = self._percentile_clip_from_ui()
+
         mask = self._run_segmentation(
             "Running all-object segmentation...",
             "All-object segmentation done. Mask overlay updated.",
@@ -905,6 +921,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 dicom_ds=self.dicom_dataset,
                 key_frames=self.key_frames,
                 key_frame_points=obj_points,
+                percentile_clip=percentile_clip,
                 progress_callback=self._update_segmentation_progress,
             )
         )
