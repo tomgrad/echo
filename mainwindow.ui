@@ -16,14 +16,27 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QHBoxLayout" name="horizontalLayout" stretch="6,1">
     <item>
-     <layout class="QVBoxLayout" name="verticalLayout_2" stretch="4,1">
-      <item>
-       <widget class="ImageView" name="imageView"/>
-      </item>
-      <item>
-       <widget class="LongitudinalView" name="longitudinalView"/>
-      </item>
-     </layout>
+     <widget class="QSplitter" name="splitter">
+      <property name="orientation">
+       <enum>Qt::Orientation::Vertical</enum>
+      </property>
+      <widget class="ImageView" name="imageView">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+         <horstretch>0</horstretch>
+         <verstretch>4</verstretch>
+        </sizepolicy>
+       </property>
+      </widget>
+      <widget class="LongitudinalView" name="longitudinalView">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+         <horstretch>0</horstretch>
+         <verstretch>1</verstretch>
+        </sizepolicy>
+       </property>
+      </widget>
+     </widget>
     </item>
     <item>
      <widget class="QFrame" name="frame">
@@ -210,6 +223,13 @@
           <string>Keyframes</string>
          </property>
          <layout class="QGridLayout" name="gridLayout_3">
+          <item row="1" column="3">
+           <widget class="QPushButton" name="deleteAllKFButton">
+            <property name="text">
+             <string>Clear all</string>
+            </property>
+           </widget>
+          </item>
           <item row="1" column="2">
            <widget class="QPushButton" name="deleteKeyFrameButton">
             <property name="toolTip">
@@ -219,26 +239,6 @@
              <string>Remove KF</string>
             </property>
            </widget>
-          </item>
-          <item row="1" column="3">
-           <widget class="QPushButton" name="deleteAllKFButton">
-            <property name="text">
-             <string>Clear all</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QPushButton" name="addKeyFrameButton">
-            <property name="toolTip">
-             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Add selected frame to keyframes&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-            </property>
-            <property name="text">
-             <string>Add KF</string>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="1" colspan="3">
-           <widget class="QListView" name="keyFramesListView"/>
           </item>
           <item row="2" column="1">
            <widget class="QSpinBox" name="objIdSpinBox">
@@ -255,6 +255,19 @@
              <number>1</number>
             </property>
            </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QPushButton" name="addKeyFrameButton">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Add selected frame to keyframes&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="text">
+             <string>Add KF</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1" colspan="3">
+           <widget class="QListView" name="keyFramesListView"/>
           </item>
          </layout>
         </widget>

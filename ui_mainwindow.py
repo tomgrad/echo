@@ -18,8 +18,8 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QListView, QMainWindow, QMenuBar,
-    QPushButton, QSizePolicy, QSpinBox, QStatusBar,
-    QVBoxLayout, QWidget)
+    QPushButton, QSizePolicy, QSpinBox, QSplitter,
+    QStatusBar, QVBoxLayout, QWidget)
 
 from imageview import ImageView
 from longitudinalview import LongitudinalView
@@ -33,22 +33,27 @@ class Ui_MainWindow(object):
         self.centralwidget.setObjectName(u"centralwidget")
         self.horizontalLayout = QHBoxLayout(self.centralwidget)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
-        self.verticalLayout_2 = QVBoxLayout()
-        self.verticalLayout_2.setObjectName(u"verticalLayout_2")
-        self.imageView = ImageView(self.centralwidget)
+        self.splitter = QSplitter(self.centralwidget)
+        self.splitter.setObjectName(u"splitter")
+        self.splitter.setOrientation(Qt.Orientation.Vertical)
+        self.imageView = ImageView(self.splitter)
         self.imageView.setObjectName(u"imageView")
-
-        self.verticalLayout_2.addWidget(self.imageView)
-
-        self.longitudinalView = LongitudinalView(self.centralwidget)
+        sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(4)
+        sizePolicy.setHeightForWidth(self.imageView.sizePolicy().hasHeightForWidth())
+        self.imageView.setSizePolicy(sizePolicy)
+        self.splitter.addWidget(self.imageView)
+        self.longitudinalView = LongitudinalView(self.splitter)
         self.longitudinalView.setObjectName(u"longitudinalView")
+        sizePolicy1 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        sizePolicy1.setHorizontalStretch(0)
+        sizePolicy1.setVerticalStretch(1)
+        sizePolicy1.setHeightForWidth(self.longitudinalView.sizePolicy().hasHeightForWidth())
+        self.longitudinalView.setSizePolicy(sizePolicy1)
+        self.splitter.addWidget(self.longitudinalView)
 
-        self.verticalLayout_2.addWidget(self.longitudinalView)
-
-        self.verticalLayout_2.setStretch(0, 4)
-        self.verticalLayout_2.setStretch(1, 1)
-
-        self.horizontalLayout.addLayout(self.verticalLayout_2)
+        self.horizontalLayout.addWidget(self.splitter)
 
         self.frame = QFrame(self.centralwidget)
         self.frame.setObjectName(u"frame")
@@ -182,15 +187,23 @@ class Ui_MainWindow(object):
         self.groupBox_3.setObjectName(u"groupBox_3")
         self.gridLayout_3 = QGridLayout(self.groupBox_3)
         self.gridLayout_3.setObjectName(u"gridLayout_3")
+        self.deleteAllKFButton = QPushButton(self.groupBox_3)
+        self.deleteAllKFButton.setObjectName(u"deleteAllKFButton")
+
+        self.gridLayout_3.addWidget(self.deleteAllKFButton, 1, 3, 1, 1)
+
         self.deleteKeyFrameButton = QPushButton(self.groupBox_3)
         self.deleteKeyFrameButton.setObjectName(u"deleteKeyFrameButton")
 
         self.gridLayout_3.addWidget(self.deleteKeyFrameButton, 1, 2, 1, 1)
 
-        self.deleteAllKFButton = QPushButton(self.groupBox_3)
-        self.deleteAllKFButton.setObjectName(u"deleteAllKFButton")
+        self.objIdSpinBox = QSpinBox(self.groupBox_3)
+        self.objIdSpinBox.setObjectName(u"objIdSpinBox")
+        self.objIdSpinBox.setMinimum(1)
+        self.objIdSpinBox.setMaximum(10)
+        self.objIdSpinBox.setValue(1)
 
-        self.gridLayout_3.addWidget(self.deleteAllKFButton, 1, 3, 1, 1)
+        self.gridLayout_3.addWidget(self.objIdSpinBox, 2, 1, 1, 1)
 
         self.addKeyFrameButton = QPushButton(self.groupBox_3)
         self.addKeyFrameButton.setObjectName(u"addKeyFrameButton")
@@ -201,14 +214,6 @@ class Ui_MainWindow(object):
         self.keyFramesListView.setObjectName(u"keyFramesListView")
 
         self.gridLayout_3.addWidget(self.keyFramesListView, 0, 1, 1, 3)
-
-        self.objIdSpinBox = QSpinBox(self.groupBox_3)
-        self.objIdSpinBox.setObjectName(u"objIdSpinBox")
-        self.objIdSpinBox.setMinimum(1)
-        self.objIdSpinBox.setMaximum(10)
-        self.objIdSpinBox.setValue(1)
-
-        self.gridLayout_3.addWidget(self.objIdSpinBox, 2, 1, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox_3)
@@ -370,18 +375,18 @@ class Ui_MainWindow(object):
         self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
         self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
+        self.deleteAllKFButton.setText(QCoreApplication.translate("MainWindow", u"Clear all", None))
 #if QT_CONFIG(tooltip)
         self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.deleteKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Remove KF", None))
-        self.deleteAllKFButton.setText(QCoreApplication.translate("MainWindow", u"Clear all", None))
+#if QT_CONFIG(tooltip)
+        self.objIdSpinBox.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Object ID</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
 #if QT_CONFIG(tooltip)
         self.addKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Add selected frame to keyframes</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.addKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Add KF", None))
-#if QT_CONFIG(tooltip)
-        self.objIdSpinBox.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Object ID</p></body></html>", None))
-#endif // QT_CONFIG(tooltip)
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", u"Segment", None))
 #if QT_CONFIG(tooltip)
         self.segBackRangeButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment from selected keyframe to previous keyframe</p></body></html>", None))
