@@ -11,6 +11,7 @@ class LongitudinalView(pg.ImageView):
         self.setColorMap(cm)
         # Longitudinal slices should stretch to fill available widget space.
         self.view.setAspectLocked(lock=False)
+        self.view.hideAxis('left')
         self.view.invertY(True)
         self.view.setMouseEnabled(x=True, y=False)
         self.ui.roiPlot.hideButtons()

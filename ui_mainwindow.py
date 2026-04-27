@@ -18,8 +18,8 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QListView, QMainWindow, QMenuBar,
-    QPushButton, QSizePolicy, QSpinBox, QSplitter,
-    QStatusBar, QVBoxLayout, QWidget)
+    QPushButton, QSizePolicy, QSpacerItem, QSpinBox,
+    QSplitter, QStatusBar, QVBoxLayout, QWidget)
 
 from imageview import ImageView
 from longitudinalview import LongitudinalView
@@ -28,7 +28,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(1112, 944)
+        MainWindow.resize(1112, 963)
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.horizontalLayout = QHBoxLayout(self.centralwidget)
@@ -185,17 +185,35 @@ class Ui_MainWindow(object):
 
         self.groupBox_3 = QGroupBox(self.frame)
         self.groupBox_3.setObjectName(u"groupBox_3")
-        self.gridLayout_3 = QGridLayout(self.groupBox_3)
-        self.gridLayout_3.setObjectName(u"gridLayout_3")
-        self.deleteAllKFButton = QPushButton(self.groupBox_3)
-        self.deleteAllKFButton.setObjectName(u"deleteAllKFButton")
+        self.horizontalLayout_2 = QHBoxLayout(self.groupBox_3)
+        self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
+        self.keyFramesListView = QListView(self.groupBox_3)
+        self.keyFramesListView.setObjectName(u"keyFramesListView")
 
-        self.gridLayout_3.addWidget(self.deleteAllKFButton, 1, 3, 1, 1)
+        self.horizontalLayout_2.addWidget(self.keyFramesListView)
+
+        self.verticalLayout_2 = QVBoxLayout()
+        self.verticalLayout_2.setObjectName(u"verticalLayout_2")
+        self.addKeyFrameButton = QPushButton(self.groupBox_3)
+        self.addKeyFrameButton.setObjectName(u"addKeyFrameButton")
+
+        self.verticalLayout_2.addWidget(self.addKeyFrameButton)
 
         self.deleteKeyFrameButton = QPushButton(self.groupBox_3)
         self.deleteKeyFrameButton.setObjectName(u"deleteKeyFrameButton")
 
-        self.gridLayout_3.addWidget(self.deleteKeyFrameButton, 1, 2, 1, 1)
+        self.verticalLayout_2.addWidget(self.deleteKeyFrameButton)
+
+        self.deleteAllKFButton = QPushButton(self.groupBox_3)
+        self.deleteAllKFButton.setObjectName(u"deleteAllKFButton")
+
+        self.verticalLayout_2.addWidget(self.deleteAllKFButton)
+
+        self.label_7 = QLabel(self.groupBox_3)
+        self.label_7.setObjectName(u"label_7")
+        self.label_7.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.verticalLayout_2.addWidget(self.label_7)
 
         self.objIdSpinBox = QSpinBox(self.groupBox_3)
         self.objIdSpinBox.setObjectName(u"objIdSpinBox")
@@ -203,17 +221,14 @@ class Ui_MainWindow(object):
         self.objIdSpinBox.setMaximum(10)
         self.objIdSpinBox.setValue(1)
 
-        self.gridLayout_3.addWidget(self.objIdSpinBox, 2, 1, 1, 1)
+        self.verticalLayout_2.addWidget(self.objIdSpinBox)
 
-        self.addKeyFrameButton = QPushButton(self.groupBox_3)
-        self.addKeyFrameButton.setObjectName(u"addKeyFrameButton")
+        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
-        self.gridLayout_3.addWidget(self.addKeyFrameButton, 1, 1, 1, 1)
+        self.verticalLayout_2.addItem(self.verticalSpacer)
 
-        self.keyFramesListView = QListView(self.groupBox_3)
-        self.keyFramesListView.setObjectName(u"keyFramesListView")
 
-        self.gridLayout_3.addWidget(self.keyFramesListView, 0, 1, 1, 3)
+        self.horizontalLayout_2.addLayout(self.verticalLayout_2)
 
 
         self.verticalLayout.addWidget(self.groupBox_3)
@@ -227,20 +242,25 @@ class Ui_MainWindow(object):
 
         self.gridLayout_2.addWidget(self.segBackRangeButton, 0, 1, 1, 1)
 
-        self.segSingleButton = QPushButton(self.groupBox_2)
-        self.segSingleButton.setObjectName(u"segSingleButton")
-
-        self.gridLayout_2.addWidget(self.segSingleButton, 0, 0, 1, 1)
-
         self.segRangeButton = QPushButton(self.groupBox_2)
         self.segRangeButton.setObjectName(u"segRangeButton")
 
         self.gridLayout_2.addWidget(self.segRangeButton, 0, 2, 1, 1)
 
-        self.segAllButton = QPushButton(self.groupBox_2)
-        self.segAllButton.setObjectName(u"segAllButton")
+        self.label_6 = QLabel(self.groupBox_2)
+        self.label_6.setObjectName(u"label_6")
+        self.label_6.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignTrailing|Qt.AlignmentFlag.AlignVCenter)
 
-        self.gridLayout_2.addWidget(self.segAllButton, 0, 3, 1, 1)
+        self.gridLayout_2.addWidget(self.label_6, 1, 1, 1, 1)
+
+        self.loClipSpinBox = QDoubleSpinBox(self.groupBox_2)
+        self.loClipSpinBox.setObjectName(u"loClipSpinBox")
+        self.loClipSpinBox.setDecimals(1)
+        self.loClipSpinBox.setMaximum(49.500000000000000)
+        self.loClipSpinBox.setSingleStep(0.500000000000000)
+        self.loClipSpinBox.setValue(0.500000000000000)
+
+        self.gridLayout_2.addWidget(self.loClipSpinBox, 1, 2, 1, 1)
 
         self.hiClipSpinBox = QDoubleSpinBox(self.groupBox_2)
         self.hiClipSpinBox.setObjectName(u"hiClipSpinBox")
@@ -252,20 +272,15 @@ class Ui_MainWindow(object):
 
         self.gridLayout_2.addWidget(self.hiClipSpinBox, 1, 3, 1, 1)
 
-        self.loClipSpinBox = QDoubleSpinBox(self.groupBox_2)
-        self.loClipSpinBox.setObjectName(u"loClipSpinBox")
-        self.loClipSpinBox.setDecimals(1)
-        self.loClipSpinBox.setMaximum(49.500000000000000)
-        self.loClipSpinBox.setSingleStep(0.500000000000000)
-        self.loClipSpinBox.setValue(0.500000000000000)
+        self.segSingleButton = QPushButton(self.groupBox_2)
+        self.segSingleButton.setObjectName(u"segSingleButton")
 
-        self.gridLayout_2.addWidget(self.loClipSpinBox, 1, 2, 1, 1)
+        self.gridLayout_2.addWidget(self.segSingleButton, 0, 0, 1, 1)
 
-        self.label_6 = QLabel(self.groupBox_2)
-        self.label_6.setObjectName(u"label_6")
-        self.label_6.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignTrailing|Qt.AlignmentFlag.AlignVCenter)
+        self.segAllButton = QPushButton(self.groupBox_2)
+        self.segAllButton.setObjectName(u"segAllButton")
 
-        self.gridLayout_2.addWidget(self.label_6, 1, 1, 1, 1)
+        self.gridLayout_2.addWidget(self.segAllButton, 0, 3, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox_2)
@@ -375,36 +390,37 @@ class Ui_MainWindow(object):
         self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
         self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
-        self.deleteAllKFButton.setText(QCoreApplication.translate("MainWindow", u"Clear all", None))
-#if QT_CONFIG(tooltip)
-        self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
-#endif // QT_CONFIG(tooltip)
-        self.deleteKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Remove KF", None))
-#if QT_CONFIG(tooltip)
-        self.objIdSpinBox.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Object ID</p></body></html>", None))
-#endif // QT_CONFIG(tooltip)
 #if QT_CONFIG(tooltip)
         self.addKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Add selected frame to keyframes</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.addKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Add KF", None))
+#if QT_CONFIG(tooltip)
+        self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.deleteKeyFrameButton.setText(QCoreApplication.translate("MainWindow", u"Remove KF", None))
+        self.deleteAllKFButton.setText(QCoreApplication.translate("MainWindow", u"Clear all", None))
+        self.label_7.setText(QCoreApplication.translate("MainWindow", u"object ID", None))
+#if QT_CONFIG(tooltip)
+        self.objIdSpinBox.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Object ID</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", u"Segment", None))
 #if QT_CONFIG(tooltip)
         self.segBackRangeButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment from selected keyframe to previous keyframe</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.segBackRangeButton.setText(QCoreApplication.translate("MainWindow", u"\u2b05\ufe0f backward", None))
 #if QT_CONFIG(tooltip)
+        self.segRangeButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment from selected keyframe to next keyframe</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.segRangeButton.setText(QCoreApplication.translate("MainWindow", u"\u27a1\ufe0f forward", None))
+        self.label_6.setText(QCoreApplication.translate("MainWindow", u"clip", None))
+#if QT_CONFIG(tooltip)
         self.segSingleButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment selected keyframe</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.segSingleButton.setText(QCoreApplication.translate("MainWindow", u"\u2b07\ufe0f single", None))
 #if QT_CONFIG(tooltip)
-        self.segRangeButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment from selected keyframe to next keyframe</p></body></html>", None))
-#endif // QT_CONFIG(tooltip)
-        self.segRangeButton.setText(QCoreApplication.translate("MainWindow", u"\u27a1\ufe0f forward", None))
-#if QT_CONFIG(tooltip)
         self.segAllButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment all the frames</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.segAllButton.setText(QCoreApplication.translate("MainWindow", u"\u2194\ufe0f all", None))
-        self.label_6.setText(QCoreApplication.translate("MainWindow", u"clip", None))
         self.groupBox_5.setTitle(QCoreApplication.translate("MainWindow", u"Masks", None))
         self.label_4.setText(QCoreApplication.translate("MainWindow", u"approx epsilon", None))
         self.contoursButton.setText(QCoreApplication.translate("MainWindow", u"Get contours", None))
