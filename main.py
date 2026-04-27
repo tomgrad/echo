@@ -15,7 +15,7 @@ from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
 from ui_mainwindow import Ui_MainWindow
 
-FRAMES_LIMIT = 100  # Max frames to load from a DICOM (for testing)
+FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing)
 # For long studies, SAM2 at 1024 can exceed VRAM because preprocessing moves all
 # frames to CUDA at once. Keeping SAM2 at 512 is a practical high-frame workaround.
 SAM2_MAX_IMAGE_SIZE = 512
@@ -65,6 +65,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.keyFramesListView.clicked.connect(self.show_selected_key_frame)
         self.keyFramesListView.activated.connect(self.show_selected_key_frame)
         self.imageView.frameChanged.connect(self.refresh_point_overlay)
+        self.imageView.frameChanged.connect(self._update_longitudinal_frame_marker)
         self.imageView.pointClicked.connect(self.on_point_clicked)
         self.saveKeyFramesButton.clicked.connect(self.save_key_frames)
         self.loadKeyFramesButton.clicked.connect(self.load_key_frames)
@@ -87,6 +88,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.hideHistogramCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
+        self._setup_longitudinal_selector()
+        self.longitudinalComboBox.currentIndexChanged.connect(self.update_longitudinal_view)
         self._setup_engine_selector()
         self.checkpointsComboBox.currentIndexChanged.connect(self._on_checkpoint_changed)
         self._populate_checkpoints_combo()
@@ -104,7 +107,120 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _on_object_id_changed(self, _value):
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
+        self.update_longitudinal_view()
         self.show_status(f"Active object set to {self._active_obj_id()}", 3000)
+
+    def _setup_longitudinal_selector(self):
+        self.longitudinalComboBox.clear()
+        self.longitudinalComboBox.addItem("y = height / 2", "x")
+        self.longitudinalComboBox.addItem("x = width / 2", "y")
+
+    def _selected_longitudinal_axis(self):
+        axis = self.longitudinalComboBox.currentData()
+        return axis if axis in {"x", "y"} else "x"
+
+    @staticmethod
+    def _contour_intersections_with_slice(contour, axis, slice_index):
+        pts = np.asarray(contour, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
+            return []
+
+        c = float(slice_index)
+        intersections = []
+        count = pts.shape[0]
+
+        for i in range(count):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i + 1) % count]
+
+            if axis == "x":
+                # Slice line: x == c; result coordinate is y.
+                if x1 == x2 == c:
+                    intersections.extend([float(y1), float(y2)])
+                    continue
+                if x1 == x2:
+                    continue
+                t = (c - x1) / (x2 - x1)
+                if 0.0 <= t <= 1.0:
+                    intersections.append(float(y1 + t * (y2 - y1)))
+            else:
+                # Slice line: y == c; result coordinate is x.
+                if y1 == y2 == c:
+                    intersections.extend([float(x1), float(x2)])
+                    continue
+                if y1 == y2:
+                    continue
+                t = (c - y1) / (y2 - y1)
+                if 0.0 <= t <= 1.0:
+                    intersections.append(float(x1 + t * (x2 - x1)))
+
+        if not intersections:
+            return []
+
+        # Deduplicate near-identical points from shared vertices.
+        rounded = np.round(np.asarray(intersections, dtype=float), 3)
+        return np.unique(rounded).astype(float).tolist()
+
+    def _longitudinal_contour_points(self, axis, slice_index, image_size):
+        if self.segmentation_contours is None:
+            return []
+
+        frame_count = self._frame_count()
+        points = []
+        max_y = float(max(1, image_size))
+
+        for frame_idx in range(frame_count):
+            contours = self.segmentation_contours.get(frame_idx, [])
+            for contour in contours:
+                values = self._contour_intersections_with_slice(contour, axis, slice_index)
+                for value in values:
+                    y = float(np.clip(max_y - value, 0.0, max_y))
+                    points.append((float(frame_idx), y))
+        return points
+
+    def _masked_volume_for_longitudinal_view(self):
+        if self.pixel_array is None or self.pixel_array.ndim != 3:
+            return None
+
+        if self.segmentation_mask is None or self.segmentation_mask.shape != self.pixel_array.shape:
+            return self.pixel_array
+
+        obj_id = self._active_obj_id()
+        obj_mask = self.segmentation_mask == obj_id
+        if np.any(obj_mask):
+            return np.where(obj_mask, self.pixel_array, 0)
+
+        return np.where(self.segmentation_mask > 0, self.pixel_array, 0)
+
+    def update_longitudinal_view(self):
+        base_volume = self.pixel_array
+        if base_volume is None or base_volume.ndim != 3:
+            self.longitudinalView.clear()
+            self.longitudinalView.set_contour_cross_sections([])
+            return
+
+        _, height, width = base_volume.shape
+        axis = self._selected_longitudinal_axis()
+
+        if axis == "y":
+            slice_index = height // 2
+            longitudinal = base_volume[:, slice_index, :].T
+            image_size = width
+        else:
+            slice_index = width // 2
+            longitudinal = base_volume[:, :, slice_index].T
+            image_size = height
+
+        self.longitudinalView.set_cross_section(longitudinal)
+        self.longitudinalView.set_contour_cross_sections(
+            self._longitudinal_contour_points(axis, slice_index, image_size)
+        )
+        self._update_longitudinal_frame_marker(self.imageView.currentIndex)
+
+    def _update_longitudinal_frame_marker(self, frame_idx=None):
+        if frame_idx is None:
+            frame_idx = self.imageView.currentIndex
+        self.longitudinalView.set_current_frame(int(frame_idx))
 
     def _start_segmentation_progress(self, message):
         self.seg_progress_bar.setRange(0, 100)
@@ -475,6 +591,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.imageView.set_points_visible(show_points)
         self.imageView.set_mask_visible(show_masks)
         self.imageView.set_contours_visible(show_contours)
+        self.longitudinalView.set_contours_visible(show_contours)
         self.imageView.set_splines_visible(show_splines)
         self.imageView.set_spline_nodes_visible(show_nodes)
         self.imageView.set_frame_visible(show_frames)
@@ -692,6 +809,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
+        self.update_longitudinal_view()
 
     def _points_by_object_for_frame(self, frame_idx):
         return {
@@ -728,6 +846,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
+        self.update_longitudinal_view()
         self.refresh_point_overlay()
         return True
 
@@ -950,6 +1069,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
+        self.update_longitudinal_view()
         self.refresh_point_overlay()
         self._finish_segmentation_progress(f"Mask fixing complete (smooth level: {iterations}).")
 
@@ -973,6 +1093,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         color = (255, 255, 0, 255)
         self.imageView.set_contour_color(color)
         self.refresh_point_overlay()
+        self.update_longitudinal_view()
         if use_approx:
             self.show_status(f"External contours extracted (approxPolyDP, epsilon={epsilon:g}).", 5000)
         else:
@@ -1036,6 +1157,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.key_frame_points.clear()
                 self.refresh_key_frames_list()
                 self.refresh_point_overlay()
+                self.update_longitudinal_view()
                 self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
 
 

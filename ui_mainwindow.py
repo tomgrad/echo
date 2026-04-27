@@ -22,20 +22,33 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
     QVBoxLayout, QWidget)
 
 from imageview import ImageView
+from longitudinalview import LongitudinalView
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(1112, 868)
+        MainWindow.resize(1112, 944)
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.horizontalLayout = QHBoxLayout(self.centralwidget)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
+        self.verticalLayout_2 = QVBoxLayout()
+        self.verticalLayout_2.setObjectName(u"verticalLayout_2")
         self.imageView = ImageView(self.centralwidget)
         self.imageView.setObjectName(u"imageView")
 
-        self.horizontalLayout.addWidget(self.imageView)
+        self.verticalLayout_2.addWidget(self.imageView)
+
+        self.longitudinalView = LongitudinalView(self.centralwidget)
+        self.longitudinalView.setObjectName(u"longitudinalView")
+
+        self.verticalLayout_2.addWidget(self.longitudinalView)
+
+        self.verticalLayout_2.setStretch(0, 4)
+        self.verticalLayout_2.setStretch(1, 1)
+
+        self.horizontalLayout.addLayout(self.verticalLayout_2)
 
         self.frame = QFrame(self.centralwidget)
         self.frame.setObjectName(u"frame")
@@ -94,36 +107,30 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.hideContoursCheckBox, 3, 0, 1, 1)
 
-        self.hideHistogramCheckBox = QCheckBox(self.groupBox_4)
-        self.hideHistogramCheckBox.setObjectName(u"hideHistogramCheckBox")
-        self.hideHistogramCheckBox.setChecked(True)
+        self.hidePointsCheckBox = QCheckBox(self.groupBox_4)
+        self.hidePointsCheckBox.setObjectName(u"hidePointsCheckBox")
 
-        self.gridLayout_4.addWidget(self.hideHistogramCheckBox, 6, 1, 1, 1)
+        self.gridLayout_4.addWidget(self.hidePointsCheckBox, 5, 1, 1, 1)
+
+        self.hideNodesCheckBox = QCheckBox(self.groupBox_4)
+        self.hideNodesCheckBox.setObjectName(u"hideNodesCheckBox")
+
+        self.gridLayout_4.addWidget(self.hideNodesCheckBox, 6, 2, 1, 1)
 
         self.label_3 = QLabel(self.groupBox_4)
         self.label_3.setObjectName(u"label_3")
 
         self.gridLayout_4.addWidget(self.label_3, 3, 2, 1, 1)
 
-        self.hidePointsCheckBox = QCheckBox(self.groupBox_4)
-        self.hidePointsCheckBox.setObjectName(u"hidePointsCheckBox")
-
-        self.gridLayout_4.addWidget(self.hidePointsCheckBox, 5, 1, 1, 1)
-
-        self.playButton = QPushButton(self.groupBox_4)
-        self.playButton.setObjectName(u"playButton")
-
-        self.gridLayout_4.addWidget(self.playButton, 0, 0, 2, 1)
-
         self.hideframesCheckBox = QCheckBox(self.groupBox_4)
         self.hideframesCheckBox.setObjectName(u"hideframesCheckBox")
 
         self.gridLayout_4.addWidget(self.hideframesCheckBox, 6, 0, 1, 1)
 
-        self.hideMasksCheckBox = QCheckBox(self.groupBox_4)
-        self.hideMasksCheckBox.setObjectName(u"hideMasksCheckBox")
+        self.label = QLabel(self.groupBox_4)
+        self.label.setObjectName(u"label")
 
-        self.gridLayout_4.addWidget(self.hideMasksCheckBox, 5, 0, 1, 1)
+        self.gridLayout_4.addWidget(self.label, 1, 2, 1, 1)
 
         self.fpsSpinBox = QSpinBox(self.groupBox_4)
         self.fpsSpinBox.setObjectName(u"fpsSpinBox")
@@ -134,10 +141,16 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.fpsSpinBox, 1, 1, 1, 1)
 
-        self.label = QLabel(self.groupBox_4)
-        self.label.setObjectName(u"label")
+        self.hideMasksCheckBox = QCheckBox(self.groupBox_4)
+        self.hideMasksCheckBox.setObjectName(u"hideMasksCheckBox")
 
-        self.gridLayout_4.addWidget(self.label, 1, 2, 1, 1)
+        self.gridLayout_4.addWidget(self.hideMasksCheckBox, 5, 0, 1, 1)
+
+        self.hideHistogramCheckBox = QCheckBox(self.groupBox_4)
+        self.hideHistogramCheckBox.setObjectName(u"hideHistogramCheckBox")
+        self.hideHistogramCheckBox.setChecked(True)
+
+        self.gridLayout_4.addWidget(self.hideHistogramCheckBox, 6, 1, 1, 1)
 
         self.lineWidthSpinBox = QSpinBox(self.groupBox_4)
         self.lineWidthSpinBox.setObjectName(u"lineWidthSpinBox")
@@ -152,10 +165,15 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.hideSplinesCheckBox, 5, 2, 1, 1)
 
-        self.hideNodesCheckBox = QCheckBox(self.groupBox_4)
-        self.hideNodesCheckBox.setObjectName(u"hideNodesCheckBox")
+        self.playButton = QPushButton(self.groupBox_4)
+        self.playButton.setObjectName(u"playButton")
 
-        self.gridLayout_4.addWidget(self.hideNodesCheckBox, 6, 2, 1, 1)
+        self.gridLayout_4.addWidget(self.playButton, 0, 0, 2, 1)
+
+        self.longitudinalComboBox = QComboBox(self.groupBox_4)
+        self.longitudinalComboBox.setObjectName(u"longitudinalComboBox")
+
+        self.gridLayout_4.addWidget(self.longitudinalComboBox, 7, 0, 1, 1)
 
 
         self.verticalLayout.addWidget(self.groupBox_4)
@@ -310,7 +328,7 @@ class Ui_MainWindow(object):
 
         self.horizontalLayout.addWidget(self.frame)
 
-        self.horizontalLayout.setStretch(0, 3)
+        self.horizontalLayout.setStretch(0, 6)
         self.horizontalLayout.setStretch(1, 1)
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
@@ -342,15 +360,15 @@ class Ui_MainWindow(object):
         self.exportContoursButton.setText(QCoreApplication.translate("MainWindow", u"Export contours", None))
         self.groupBox_4.setTitle(QCoreApplication.translate("MainWindow", u"View", None))
         self.hideContoursCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide contours", None))
-        self.hideHistogramCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide hist", None))
-        self.label_3.setText(QCoreApplication.translate("MainWindow", u"line width", None))
         self.hidePointsCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide points", None))
-        self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
-        self.hideframesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide frames", None))
-        self.hideMasksCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide masks", None))
-        self.label.setText(QCoreApplication.translate("MainWindow", u"fps", None))
-        self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
         self.hideNodesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide nodes", None))
+        self.label_3.setText(QCoreApplication.translate("MainWindow", u"line width", None))
+        self.hideframesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide frames", None))
+        self.label.setText(QCoreApplication.translate("MainWindow", u"fps", None))
+        self.hideMasksCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide masks", None))
+        self.hideHistogramCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide hist", None))
+        self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
+        self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
 #if QT_CONFIG(tooltip)
         self.deleteKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Remove selected keyframe</p></body></html>", None))
