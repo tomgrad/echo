@@ -57,6 +57,10 @@ class LongitudinalView(pg.ImageView):
             self._cross_section_points.setData(pos=[])
             return
 
+        prev_x_range = None
+        if self.image is not None:
+            prev_x_range = tuple(self.view.viewRange()[0])
+
         image_size = int(max(1, image_2d.shape[0]))
         frame_count = int(max(1, image_2d.shape[1]))
         self._frame_count = frame_count
@@ -65,10 +69,20 @@ class LongitudinalView(pg.ImageView):
         rotated = np.rot90(image_2d, k=-1)
         self.setImage(rotated, autoLevels=True)
 
-        rows, cols = rotated.shape
+        if prev_x_range is None:
+            x_range = (0.0, float(frame_count))
+        else:
+            x0, x1 = prev_x_range
+            x0 = float(np.clip(x0, 0.0, float(frame_count)))
+            x1 = float(np.clip(x1, 0.0, float(frame_count)))
+            if x1 - x0 < 1e-6:
+                x_range = (0.0, float(frame_count))
+            else:
+                x_range = (x0, x1)
+
         self._locked_y_range = (0.0, float(image_size))
         self.view.setRange(
-            xRange=(0.0, float(frame_count)),
+            xRange=x_range,
             yRange=self._locked_y_range,
             padding=0.0,
         )

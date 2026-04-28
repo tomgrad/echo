@@ -18,8 +18,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QListView, QMainWindow, QMenuBar,
-    QPushButton, QSizePolicy, QSpacerItem, QSpinBox,
-    QSplitter, QStatusBar, QVBoxLayout, QWidget)
+    QPushButton, QSizePolicy, QSlider, QSpacerItem,
+    QSpinBox, QSplitter, QStatusBar, QVBoxLayout,
+    QWidget)
 
 from imageview import ImageView
 from longitudinalview import LongitudinalView
@@ -179,6 +180,13 @@ class Ui_MainWindow(object):
         self.longitudinalComboBox.setObjectName(u"longitudinalComboBox")
 
         self.gridLayout_4.addWidget(self.longitudinalComboBox, 7, 0, 1, 1)
+
+        self.angleSlider = QSlider(self.groupBox_4)
+        self.angleSlider.setObjectName(u"angleSlider")
+        self.angleSlider.setMaximum(180)
+        self.angleSlider.setOrientation(Qt.Orientation.Horizontal)
+
+        self.gridLayout_4.addWidget(self.angleSlider, 7, 1, 1, 2)
 
 
         self.verticalLayout.addWidget(self.groupBox_4)

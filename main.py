@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import io
+from typing import Any
 import numpy as np
 import pydicom
 from PySide6.QtCore import QStringListModel, QTimer
@@ -15,7 +16,7 @@ from medseg2 import MedSam2Segmenter, Sam2Segmenter
 from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
 from ui_mainwindow import Ui_MainWindow
 
-FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing)
+FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no limit.
 # For long studies, SAM2 at 1024 can exceed VRAM because preprocessing moves all
 # frames to CUDA at once. Keeping SAM2 at 512 is a practical high-frame workaround.
 SAM2_MAX_IMAGE_SIZE = 512
@@ -89,7 +90,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
         self._setup_longitudinal_selector()
-        self.longitudinalComboBox.currentIndexChanged.connect(self.update_longitudinal_view)
+        self.longitudinalComboBox.currentIndexChanged.connect(self._on_longitudinal_mode_changed)
+        self.angleSlider.valueChanged.connect(self._on_longitudinal_angle_changed)
         self._setup_engine_selector()
         self.checkpointsComboBox.currentIndexChanged.connect(self._on_checkpoint_changed)
         self._populate_checkpoints_combo()
@@ -114,10 +116,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.longitudinalComboBox.clear()
         self.longitudinalComboBox.addItem("y = height / 2", "x")
         self.longitudinalComboBox.addItem("x = width / 2", "y")
+        self.longitudinalComboBox.addItem("free (center + angle)", "free")
+        self.angleSlider.setEnabled(False)
 
     def _selected_longitudinal_axis(self):
         axis = self.longitudinalComboBox.currentData()
-        return axis if axis in {"x", "y"} else "x"
+        return axis if axis in {"x", "y", "free"} else "x"
+
+    def _on_longitudinal_mode_changed(self, _index=None):
+        is_free = self._selected_longitudinal_axis() == "free"
+        self.angleSlider.setEnabled(is_free)
+        self.update_longitudinal_view()
+
+    def _on_longitudinal_angle_changed(self, _value):
+        if self._selected_longitudinal_axis() == "free":
+            self.update_longitudinal_view()
 
     @staticmethod
     def _contour_intersections_with_slice(contour, axis, slice_index):
@@ -161,7 +174,124 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         rounded = np.round(np.asarray(intersections, dtype=float), 3)
         return np.unique(rounded).astype(float).tolist()
 
-    def _longitudinal_contour_points(self, axis, slice_index, image_size):
+    @staticmethod
+    def _cross2d(a, b):
+        return float(a[0] * b[1] - a[1] * b[0])
+
+    @classmethod
+    def _contour_intersections_with_line_segment(cls, contour, start_xy, end_xy):
+        pts = np.asarray(contour, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
+            return []
+
+        p0 = np.asarray(start_xy, dtype=float)
+        p1 = np.asarray(end_xy, dtype=float)
+        r = p1 - p0
+        r_norm = float(np.linalg.norm(r))
+        if r_norm < 1e-6:
+            return []
+
+        intersections = []
+        count = pts.shape[0]
+        eps = 1e-6
+
+        for i in range(count):
+            q = pts[i]
+            q2 = pts[(i + 1) % count]
+            s = q2 - q
+            q_minus_p = q - p0
+            r_cross_s = cls._cross2d(r, s)
+
+            if abs(r_cross_s) <= eps:
+                # Collinear edge: include edge endpoints that fall on the sampling line segment.
+                if abs(cls._cross2d(q_minus_p, r)) > 1e-3:
+                    continue
+                for candidate in (q, q2):
+                    t = float(np.dot(candidate - p0, r) / np.dot(r, r))
+                    if 0.0 <= t <= 1.0:
+                        intersections.append(t * r_norm)
+                continue
+
+            t = cls._cross2d(q_minus_p, s) / r_cross_s
+            u = cls._cross2d(q_minus_p, r) / r_cross_s
+            if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+                intersections.append(t * r_norm)
+
+        if not intersections:
+            return []
+
+        rounded = np.round(np.asarray(intersections, dtype=float), 3)
+        return np.unique(rounded).astype(float).tolist()
+
+    @staticmethod
+    def _line_segment_through_center(height, width, angle_degrees):
+        cx = 0.5 * (float(width) - 1.0)
+        cy = 0.5 * (float(height) - 1.0)
+        theta = np.deg2rad(float(angle_degrees) % 360.0)
+        direction = np.asarray([np.cos(theta), np.sin(theta)], dtype=float)
+
+        tx_min, tx_max = -np.inf, np.inf
+        ty_min, ty_max = -np.inf, np.inf
+
+        if abs(direction[0]) > 1e-8:
+            tx1 = (0.0 - cx) / direction[0]
+            tx2 = (float(width) - 1.0 - cx) / direction[0]
+            tx_min, tx_max = min(tx1, tx2), max(tx1, tx2)
+
+        if abs(direction[1]) > 1e-8:
+            ty1 = (0.0 - cy) / direction[1]
+            ty2 = (float(height) - 1.0 - cy) / direction[1]
+            ty_min, ty_max = min(ty1, ty2), max(ty1, ty2)
+
+        t_min = max(tx_min, ty_min)
+        t_max = min(tx_max, ty_max)
+
+        p0 = np.asarray([cx, cy], dtype=float) + t_min * direction
+        p1 = np.asarray([cx, cy], dtype=float) + t_max * direction
+        return p0, p1
+
+    @classmethod
+    def _sample_volume_along_segment(
+        cls,
+        volume: np.ndarray,
+        start_xy: np.ndarray,
+        end_xy: np.ndarray,
+        samples_count: int,
+    ) -> np.ndarray:
+        samples_count = max(2, int(samples_count))
+        x = np.linspace(float(start_xy[0]), float(end_xy[0]), samples_count, dtype=float)
+        y = np.linspace(float(start_xy[1]), float(end_xy[1]), samples_count, dtype=float)
+
+        x0 = np.floor(x).astype(np.int32)
+        y0 = np.floor(y).astype(np.int32)
+        x1 = np.clip(x0 + 1, 0, volume.shape[2] - 1)
+        y1 = np.clip(y0 + 1, 0, volume.shape[1] - 1)
+        x0 = np.clip(x0, 0, volume.shape[2] - 1)
+        y0 = np.clip(y0, 0, volume.shape[1] - 1)
+
+        wx = x - x0
+        wy = y - y0
+
+        v00 = volume[:, y0, x0]
+        v10 = volume[:, y0, x1]
+        v01 = volume[:, y1, x0]
+        v11 = volume[:, y1, x1]
+
+        top = v00 * (1.0 - wx) + v10 * wx
+        bottom = v01 * (1.0 - wx) + v11 * wx
+        return (top * (1.0 - wy) + bottom * wy).T
+
+    def _longitudinal_contour_points(
+        self,
+        axis,
+        slice_index,
+        image_size,
+        line_start=None,
+        line_end=None,
+        line_length=None,
+        free_full_size=None,
+        free_clip_offset=0.0,
+    ):
         if self.segmentation_contours is None:
             return []
 
@@ -172,36 +302,23 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         for frame_idx in range(frame_count):
             contours = self.segmentation_contours.get(frame_idx, [])
             for contour in contours:
-                values = self._contour_intersections_with_slice(contour, axis, slice_index)
+                if axis == "free":
+                    values = self._contour_intersections_with_line_segment(contour, line_start, line_end)
+                else:
+                    values = self._contour_intersections_with_slice(contour, axis, slice_index)
                 for value in values:
+                    if axis == "free" and line_length is not None and line_length > 1e-6:
+                        full_size = max(2, int(free_full_size if free_full_size is not None else image_size))
+                        # Project arc-length along free line into full sampled row coordinates.
+                        value = float(value) * float(full_size - 1) / float(line_length)
+                        # Clip into displayed row coordinates when we crop to frame width.
+                        value = float(value) - float(free_clip_offset)
                     y = float(np.clip(max_y - value, 0.0, max_y))
                     points.append((float(frame_idx), y))
         return points
 
-    def _masked_volume_for_longitudinal_view(self):
-        if self.pixel_array is None or self.pixel_array.ndim != 3:
-            return None
-
-        if self.segmentation_mask is None or self.segmentation_mask.shape != self.pixel_array.shape:
-            return self.pixel_array
-
-        obj_id = self._active_obj_id()
-        obj_mask = self.segmentation_mask == obj_id
-        if np.any(obj_mask):
-            return np.where(obj_mask, self.pixel_array, 0)
-
-        return np.where(self.segmentation_mask > 0, self.pixel_array, 0)
-
-    def update_longitudinal_view(self):
-        base_volume = self.pixel_array
-        if base_volume is None or base_volume.ndim != 3:
-            self.longitudinalView.clear()
-            self.longitudinalView.set_contour_cross_sections([])
-            return
-
+    def _build_axis_longitudinal_slice(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
         _, height, width = base_volume.shape
-        axis = self._selected_longitudinal_axis()
-
         if axis == "y":
             slice_index = height // 2
             longitudinal = base_volume[:, slice_index, :].T
@@ -211,10 +328,78 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             longitudinal = base_volume[:, :, slice_index].T
             image_size = height
 
-        self.longitudinalView.set_cross_section(longitudinal)
-        self.longitudinalView.set_contour_cross_sections(
-            self._longitudinal_contour_points(axis, slice_index, image_size)
-        )
+        return {
+            "slice_index": slice_index,
+            "longitudinal": longitudinal,
+            "image_size": image_size,
+            "line_start": None,
+            "line_end": None,
+            "line_length": None,
+            "free_full_size": None,
+            "free_clip_offset": 0.0,
+        }
+
+    def _build_free_longitudinal_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
+        _, height, width = base_volume.shape
+        angle_degrees = float(self.angleSlider.value())
+        line_start, line_end = self._line_segment_through_center(height, width, angle_degrees)
+        line_length = float(np.linalg.norm(line_end - line_start))
+        full_samples = max(2, int(np.ceil(line_length)) + 1)
+        full_longitudinal = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
+
+        target_size = max(2, int(width))
+        if full_samples > target_size:
+            start = int((full_samples - target_size) // 2)
+            end = start + target_size
+            longitudinal = full_longitudinal[start:end, :]
+            image_size = target_size
+            free_clip_offset = float(start)
+        else:
+            longitudinal = full_longitudinal
+            image_size = full_samples
+            free_clip_offset = 0.0
+
+        return {
+            "slice_index": None,
+            "longitudinal": longitudinal,
+            "image_size": image_size,
+            "line_start": line_start,
+            "line_end": line_end,
+            "line_length": line_length,
+            "free_full_size": full_samples,
+            "free_clip_offset": free_clip_offset,
+        }
+
+    def _build_longitudinal_slice_context(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
+        if axis in {"x", "y"}:
+            return self._build_axis_longitudinal_slice(base_volume, axis)
+        return self._build_free_longitudinal_slice(base_volume)
+
+    def update_longitudinal_view(self):
+        base_volume = self.pixel_array
+        if base_volume is None or base_volume.ndim != 3:
+            self.longitudinalView.clear()
+            self.longitudinalView.set_contour_cross_sections([])
+            return
+
+        axis = self._selected_longitudinal_axis()
+        ctx = self._build_longitudinal_slice_context(base_volume, axis)
+
+        self.longitudinalView.set_cross_section(ctx["longitudinal"])
+        if self.hideContoursCheckBox.isChecked():
+            contour_points = []
+        else:
+            contour_points = self._longitudinal_contour_points(
+                axis,
+                ctx["slice_index"],
+                ctx["image_size"],
+                line_start=ctx["line_start"],
+                line_end=ctx["line_end"],
+                line_length=ctx["line_length"],
+                free_full_size=ctx["free_full_size"],
+                free_clip_offset=ctx["free_clip_offset"],
+            )
+        self.longitudinalView.set_contour_cross_sections(contour_points)
         self._update_longitudinal_frame_marker(self.imageView.currentIndex)
 
     def _update_longitudinal_frame_marker(self, frame_idx=None):
