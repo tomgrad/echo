@@ -1,7 +1,8 @@
-import pyqtgraph as pg
 import numpy as np
+import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter
+
 
 class ImageView(pg.ImageView):
     dragCoordinates = Signal(int, int)
@@ -13,11 +14,11 @@ class ImageView(pg.ImageView):
         super().__init__(parent, view=pg.PlotItem())
         self.ui.menuBtn.hide()
         self.ui.roiBtn.hide()
-        cm = pg.colormap.getFromMatplotlib('gray')
+        cm = pg.colormap.getFromMatplotlib("gray")
         self.setColorMap(cm)
         self.view.setAspectLocked(lock=True)
         self.view.invertY(False)
-        self.ui.roiPlot.hideButtons()
+        # self.ui.roiPlot.hideButtons()
         self.timeLine.sigPositionChanged.connect(self._on_timeline_changed)
 
         # Dynamic scatter overlays by object id.
@@ -43,7 +44,7 @@ class ImageView(pg.ImageView):
         )
         self._spline_nodes_color = (255, 80, 80, 255)
         self._spline_nodes_item = pg.ScatterPlotItem(
-            symbol='o',
+            symbol="o",
             size=8,
             pen=pg.mkPen(self._spline_nodes_color, width=1),
             brush=pg.mkBrush(self._spline_nodes_color),
@@ -110,13 +111,15 @@ class ImageView(pg.ImageView):
         color = self._color_for_obj_id(obj_id)
         pen = pg.mkPen(color, width=2)
         pos = pg.ScatterPlotItem(
-            symbol='o', size=12,
+            symbol="o",
+            size=12,
             pen=pen,
             brush=pg.mkBrush(color),
             hoverable=False,
         )
         neg = pg.ScatterPlotItem(
-            symbol='x', size=12,
+            symbol="x",
+            size=12,
             pen=pen,
             brush=pg.mkBrush(color),
             hoverable=False,
@@ -141,12 +144,14 @@ class ImageView(pg.ImageView):
 
     def set_points(self, positive_points, negative_points):
         """Update prompt-point overlays.  Each arg is a list of (x, y) tuples."""
-        self.set_points_by_object({
-            1: {
-                "positive": positive_points or [],
-                "negative": negative_points or [],
+        self.set_points_by_object(
+            {
+                1: {
+                    "positive": positive_points or [],
+                    "negative": negative_points or [],
+                }
             }
-        })
+        )
 
     def set_points_by_object(self, points_by_object):
         """Update prompt points for all objects.
@@ -282,7 +287,9 @@ class ImageView(pg.ImageView):
 
     def set_contour_color(self, rgba):
         self._contour_color = tuple(rgba)
-        self._contour_item.setPen(pg.mkPen(self._contour_color, width=self._contour_width))
+        self._contour_item.setPen(
+            pg.mkPen(self._contour_color, width=self._contour_width)
+        )
         self.view.update()
 
     def set_spline_color(self, rgba):
@@ -298,7 +305,9 @@ class ImageView(pg.ImageView):
 
     def set_contour_width(self, width):
         self._contour_width = max(1, int(width))
-        self._contour_item.setPen(pg.mkPen(self._contour_color, width=self._contour_width))
+        self._contour_item.setPen(
+            pg.mkPen(self._contour_color, width=self._contour_width)
+        )
         self.view.update()
 
     def set_spline_width(self, width):
@@ -312,4 +321,3 @@ class ImageView(pg.ImageView):
 
     def set_histogram_visible(self, visible):
         self.ui.histogram.setVisible(bool(visible))
-

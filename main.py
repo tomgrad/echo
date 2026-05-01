@@ -89,6 +89,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.hideHistogramCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
+        self.imageView.getHistogramWidget().item.sigLevelsChanged.connect(
+            self._sync_longitudinal_histogram
+        )
         self._setup_longitudinal_selector()
         self.longitudinalComboBox.currentIndexChanged.connect(self._on_longitudinal_mode_changed)
         self.angleSlider.valueChanged.connect(self._on_longitudinal_angle_changed)
@@ -406,6 +409,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if frame_idx is None:
             frame_idx = self.imageView.currentIndex
         self.longitudinalView.set_current_frame(int(frame_idx))
+
+    def _sync_longitudinal_histogram(self, *_args):
+        levels = self.imageView.getLevels()
+        self.longitudinalView.set_histogram_levels(levels)
 
     def _start_segmentation_progress(self, message):
         self.seg_progress_bar.setRange(0, 100)
@@ -1343,6 +1350,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.refresh_key_frames_list()
                 self.refresh_point_overlay()
                 self.update_longitudinal_view()
+                self._sync_longitudinal_histogram()
                 self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
 
 

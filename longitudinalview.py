@@ -16,6 +16,7 @@ class LongitudinalView(pg.ImageView):
         self.view.setMouseEnabled(x=True, y=False)
         self.ui.roiPlot.hideButtons()
         self.ui.histogram.setVisible(False)
+        self._histogram_levels = None
         self._locked_y_range = (0.0, 1.0)
         self._frame_count = 1
         self._current_frame = 0
@@ -67,7 +68,9 @@ class LongitudinalView(pg.ImageView):
 
         # Rotate view so longitudinal slices are displayed with the expected orientation.
         rotated = np.rot90(image_2d, k=-1)
-        self.setImage(rotated, autoLevels=True)
+        self.setImage(rotated, autoLevels=self._histogram_levels is None)
+        if self._histogram_levels is not None:
+            self.setLevels(*self._histogram_levels)
 
         if prev_x_range is None:
             x_range = (0.0, float(frame_count))
@@ -110,3 +113,15 @@ class LongitudinalView(pg.ImageView):
         clamped = max(0, min(self._current_frame, self._frame_count - 1))
         self._frame_line.setValue(float(clamped))
         self._frame_line.setVisible(self.image is not None)
+
+    def set_histogram_levels(self, levels):
+        if levels is None:
+            self._histogram_levels = None
+            if self.image is not None:
+                self.autoLevels()
+            return
+
+        lo, hi = levels
+        self._histogram_levels = (float(lo), float(hi))
+        if self.image is not None:
+            self.setLevels(*self._histogram_levels)
