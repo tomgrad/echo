@@ -222,6 +222,12 @@
             <property name="orientation">
              <enum>Qt::Orientation::Horizontal</enum>
             </property>
+            <property name="tickPosition">
+             <enum>QSlider::TickPosition::TicksBelow</enum>
+            </property>
+            <property name="tickInterval">
+             <number>45</number>
+            </property>
            </widget>
           </item>
          </layout>
@@ -501,7 +507,7 @@
      <x>0</x>
      <y>0</y>
      <width>1112</width>
-     <height>30</height>
+     <height>22</height>
     </rect>
    </property>
   </widget>

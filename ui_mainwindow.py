@@ -185,6 +185,8 @@ class Ui_MainWindow(object):
         self.angleSlider.setObjectName(u"angleSlider")
         self.angleSlider.setMaximum(180)
         self.angleSlider.setOrientation(Qt.Orientation.Horizontal)
+        self.angleSlider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.angleSlider.setTickInterval(45)
 
         self.gridLayout_4.addWidget(self.angleSlider, 7, 1, 1, 2)
 
@@ -361,7 +363,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 1112, 30))
+        self.menubar.setGeometry(QRect(0, 0, 1112, 22))
         MainWindow.setMenuBar(self.menubar)
         self.statusbar = QStatusBar(MainWindow)
         self.statusbar.setObjectName(u"statusbar")
