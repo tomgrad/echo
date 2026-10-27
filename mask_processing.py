@@ -211,3 +211,51 @@ def fit_spline_contours(
     if return_nodes:
         return spline_map, node_map
     return spline_map
+
+
+def sample_outline_curve(outline) -> np.ndarray:
+    """Sample a closed Catmull-Rom spline through custom mask outline vertices.
+
+    Args:
+        outline: Array-like of shape (N, 2), N >= 4, vertices as (x, y).
+
+    Returns:
+        np.ndarray of shape (num_samples, 2) with points on the closed curve.
+    """
+    pts = np.asarray(outline, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 4:
+        raise ValueError("outline must have shape (N, 2) with N >= 4")
+    num_samples = max(400, pts.shape[0] * 10)
+    return interpolate_contour_catmull_rom(
+        pts,
+        num_control_points=pts.shape[0],
+        num_samples=num_samples,
+    )
+
+
+def point_segment_distance_sq(point, seg_start, seg_end) -> float:
+    """Squared distance from a point to a line segment."""
+    p = np.asarray(point, dtype=np.float64)
+    a = np.asarray(seg_start, dtype=np.float64)
+    ab = np.asarray(seg_end, dtype=np.float64) - a
+    denom = float(ab @ ab)
+    t = 0.0 if denom == 0.0 else float(np.clip((p - a) @ ab / denom, 0.0, 1.0))
+    d = a + t * ab - p
+    return float(d @ d)
+
+
+def build_custom_mask(outline, height: int, width: int) -> np.ndarray:
+    """Rasterize a custom mask outline into a binary mask.
+
+    Args:
+        outline: Array-like of shape (N, 2), N >= 4, vertices as (x, y) = (col, row).
+        height: Mask rows.
+        width: Mask columns.
+
+    Returns:
+        uint8 mask of shape (height, width), 1 inside the closed spline.
+    """
+    curve = sample_outline_curve(outline)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(mask, [np.round(curve).astype(np.int32)], 1)
+    return mask

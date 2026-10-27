@@ -1,7 +1,10 @@
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, Qt, Signal
 from PySide6.QtGui import QPainter
+from PySide6.QtWidgets import QGraphicsView
+
+OUTLINE_HANDLE_RADIUS_PX = 10
 
 
 class ImageView(pg.ImageView):
@@ -11,6 +14,10 @@ class ImageView(pg.ImageView):
     pointClicked = Signal(int, int, str)
     # Emitted while the user drags the custom cross-section line.
     lineChanged = Signal()
+    # Custom mask vertex drag: handle index into the last set_outline() vertices.
+    outlineHandlePressed = Signal(int)
+    outlineHandleMoved = Signal(int, int)
+    outlineHandleReleased = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent, view=pg.PlotItem())
@@ -53,14 +60,36 @@ class ImageView(pg.ImageView):
             brush=pg.mkBrush(self._spline_nodes_color),
             hoverable=False,
         )
+        self._outline_vertex_xy = np.zeros((0, 2))
+        self._outline_edit_enabled = False
+        self._outline_drag_index = None
+        self.ui.graphicsView.viewport().installEventFilter(self)
+        # Partial repaints leave stale thin lines while the cross-section ROI moves.
+        self.ui.graphicsView.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        self._outline_color = (255, 160, 0, 255)
+        self._outline_item = pg.PlotDataItem(
+            pen=pg.mkPen(self._outline_color, width=2),
+            connect="finite",
+        )
+        self._outline_vertices_item = pg.ScatterPlotItem(
+            symbol="s",
+            size=7,
+            pen=pg.mkPen(self._outline_color, width=1),
+            brush=pg.mkBrush(self._outline_color),
+            hoverable=False,
+        )
         self._contour_item.setZValue(20)
         self._spline_item.setZValue(21)
         self._spline_nodes_item.setZValue(22)
+        self._outline_item.setZValue(23)
+        self._outline_vertices_item.setZValue(24)
         self._line_roi = None
         self.view.addItem(self._mask_item)
         self.view.addItem(self._contour_item)
         self.view.addItem(self._spline_item)
         self.view.addItem(self._spline_nodes_item)
+        self.view.addItem(self._outline_item)
+        self.view.addItem(self._outline_vertices_item)
 
         self.view.scene().sigMouseClicked.connect(self._on_scene_click)
         self.ui.roiPlot.scene().sigMouseClicked.connect(self._on_timeline_click)
@@ -262,6 +291,76 @@ class ImageView(pg.ImageView):
             self._spline_item.clear()
         else:
             self._spline_item.setData(x=xs, y=ys)
+        self.view.update()
+
+    def set_outline_edit_enabled(self, enabled):
+        """Allow dragging custom mask vertices with the left mouse button."""
+        self._outline_edit_enabled = bool(enabled)
+        self._outline_drag_index = None
+
+    def _outline_handle_at(self, pos):
+        """Index of the outline vertex under viewport position pos, or None."""
+        img_item = self.getImageItem()
+        best_index = None
+        best_d2 = OUTLINE_HANDLE_RADIUS_PX ** 2
+        for index, (x, y) in enumerate(self._outline_vertex_xy):
+            handle = self.ui.graphicsView.mapFromScene(img_item.mapToScene(QPointF(x, y)))
+            d2 = (handle.x() - pos.x()) ** 2 + (handle.y() - pos.y()) ** 2
+            if d2 <= best_d2:
+                best_index = index
+                best_d2 = d2
+        return best_index
+
+    def _image_xy_from_viewport(self, pos):
+        scene_pos = self.ui.graphicsView.mapToScene(pos)
+        image_pos = self.getImageItem().mapFromScene(scene_pos)
+        return int(round(image_pos.x())), int(round(image_pos.y()))
+
+    def eventFilter(self, obj, event):
+        if obj is not self.ui.graphicsView.viewport() or not self._outline_edit_enabled:
+            return False
+        kind = event.type()
+        if kind == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            index = self._outline_handle_at(event.position().toPoint())
+            if index is None:
+                return False
+            self._outline_drag_index = index
+            self.outlineHandlePressed.emit(index)
+            return True
+        if kind == QEvent.MouseMove and self._outline_drag_index is not None:
+            x, y = self._image_xy_from_viewport(event.position().toPoint())
+            self.outlineHandleMoved.emit(x, y)
+            return True
+        if kind == QEvent.MouseButtonRelease and self._outline_drag_index is not None:
+            self._outline_drag_index = None
+            self.outlineHandleReleased.emit()
+            return True
+        return False
+
+    def set_outline(self, curves, vertices):
+        """Display custom mask outlines: closed spline curves and their vertices."""
+        self._outline_vertex_xy = np.asarray(vertices, dtype=float).reshape(-1, 2)
+        xs = []
+        ys = []
+        for curve in curves:
+            pts = np.asarray(curve)
+            if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
+                continue
+            closed = np.vstack([pts, pts[0]])
+            xs.extend(closed[:, 0].astype(float).tolist())
+            ys.extend(closed[:, 1].astype(float).tolist())
+            xs.append(np.nan)
+            ys.append(np.nan)
+
+        if xs:
+            self._outline_item.setData(x=xs, y=ys)
+        else:
+            self._outline_item.clear()
+
+        if len(vertices) == 0:
+            self._outline_vertices_item.setData(pos=[])
+        else:
+            self._outline_vertices_item.setData(pos=np.asarray(vertices, dtype=float))
         self.view.update()
 
     def set_splines_visible(self, visible):

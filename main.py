@@ -12,10 +12,17 @@ from PySide6.QtCore import QStringListModel, QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
 from medseg2 import MedSam2Segmenter
-from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
+from mask_processing import (
+    build_custom_mask,
+    fix_labeled_mask,
+    find_external_contours,
+    fit_spline_contours,
+    point_segment_distance_sq,
+    sample_outline_curve,
+)
 from ui_mainwindow import Ui_MainWindow
 
-LINE_AXES = {"free", "custom"}  # cross-section modes defined by a line in the image
+LINE_AXES = {"custom"}  # cross-section modes defined by a line in the image
 FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no limit.
 MEDSAM2_MODEL_CFG = "configs/sam2.1_hiera_t512.yaml"
 
@@ -36,6 +43,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.key_frames = []
         # key_frame_points: obj_id -> frame_index -> list of [x, y, positive(bool)]
         self.key_frame_points = {}
+        # key_frame_outlines: obj_id -> frame_index -> list of [x, y] custom mask vertices
+        self.key_frame_outlines = {}
+        # Outline vertices in the order drawn by the image view: (obj_id, vertex_index).
+        self._outline_refs = []
+        # Active vertex drag: (obj_id, vertex_index, frame_index).
+        self._outline_drag = None
         self.segmentation_mask = None
         self.segmentation_contours = None
         self.segmentation_splines = None
@@ -75,6 +88,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.fixMasksButton.clicked.connect(self.fix_masks)
         self.contoursButton.clicked.connect(self.find_external_contours)
         self.splinesButton.clicked.connect(self.fit_contour_splines)
+        self.trackMaskButton.clicked.connect(self.track_custom_mask)
+        self.clearOutlineButton.clicked.connect(self.clear_outline)
+        self.customMaskCheckBox.toggled.connect(self.imageView.set_outline_edit_enabled)
+        self.imageView.outlineHandlePressed.connect(self._on_outline_handle_pressed)
+        self.imageView.outlineHandleMoved.connect(self._on_outline_handle_moved)
+        self.imageView.outlineHandleReleased.connect(self._on_outline_handle_released)
         self.objIdSpinBox.valueChanged.connect(self._on_object_id_changed)
         self.hidePointsCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideMasksCheckBox.stateChanged.connect(self._update_overlay_visibility)
@@ -90,7 +109,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         )
         self._setup_cross_section_selector()
         self.crossSectionComboBox.currentIndexChanged.connect(self._on_cross_section_mode_changed)
-        self.angleSlider.valueChanged.connect(self._on_cross_section_angle_changed)
         self.imageView.lineChanged.connect(self._on_custom_line_changed)
         self.checkpointsComboBox.currentIndexChanged.connect(self._on_checkpoint_changed)
         self._populate_checkpoints_combo()
@@ -113,43 +131,35 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _setup_cross_section_selector(self):
         self.crossSectionComboBox.clear()
-        self.crossSectionComboBox.addItem("y = height / 2", "y")
-        self.crossSectionComboBox.addItem("x = width / 2", "x")
-        self.crossSectionComboBox.addItem("free (center + angle)", "free")
-        self.crossSectionComboBox.addItem("custom line", "custom")
-        self.angleSlider.setEnabled(False)
+        self.crossSectionComboBox.addItem("vertical", "vertical")
+        self.crossSectionComboBox.addItem("custom", "custom")
 
     def _selected_cross_section_axis(self):
         axis = self.crossSectionComboBox.currentData()
-        return axis if axis in {"x", "y", "free", "custom"} else "x"
+        return axis if axis in {"vertical", "custom"} else "vertical"
 
     def _on_cross_section_mode_changed(self, _index=None):
         axis = self._selected_cross_section_axis()
-        self.angleSlider.setEnabled(axis == "free")
         self.imageView.set_line_visible(axis == "custom")
         if axis == "custom" and self.imageView.line_endpoints() is None:
             self._reset_custom_line()
         self.update_cross_section_view()
-
-    def _on_cross_section_angle_changed(self, _value):
-        if self._selected_cross_section_axis() == "free":
-            self.update_cross_section_view()
 
     def _on_custom_line_changed(self):
         if self._selected_cross_section_axis() == "custom":
             self.update_cross_section_view()
 
     def _reset_custom_line(self):
-        """Place the custom line across the middle of the frame, return its endpoints."""
+        """Place the custom line vertically across the middle of the frame, return its endpoints."""
         _, height, width = self.cross_section_volume.shape
-        p0 = (0.25 * (width - 1), 0.5 * (height - 1))
-        p1 = (0.75 * (width - 1), 0.5 * (height - 1))
+        p0 = (0.5 * (width - 1), 0.15 * (height - 1))
+        p1 = (0.5 * (width - 1), 0.85 * (height - 1))
         self.imageView.set_line_endpoints(p0, p1)
         self.imageView.set_line_visible(self._selected_cross_section_axis() == "custom")
         return self.imageView.line_endpoints()
 
     @staticmethod
-    def _contour_intersections_with_slice(contour, axis, slice_index):
+    def _contour_intersections_with_slice(contour, slice_index):
         pts = np.asarray(contour, dtype=float)
         if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
             return []
@@ -162,26 +172,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             x1, y1 = pts[i]
             x2, y2 = pts[(i + 1) % count]
 
-            if axis == "x":
-                # Slice line: x == c; result coordinate is y.
-                if x1 == x2 == c:
-                    intersections.extend([float(y1), float(y2)])
-                    continue
-                if x1 == x2:
-                    continue
-                t = (c - x1) / (x2 - x1)
-                if 0.0 <= t <= 1.0:
-                    intersections.append(float(y1 + t * (y2 - y1)))
-            else:
-                # Slice line: y == c; result coordinate is x.
-                if y1 == y2 == c:
-                    intersections.extend([float(x1), float(x2)])
-                    continue
-                if y1 == y2:
-                    continue
-                t = (c - y1) / (y2 - y1)
-                if 0.0 <= t <= 1.0:
-                    intersections.append(float(x1 + t * (x2 - x1)))
+            # Slice line: x == c; result coordinate is y.
+            if x1 == x2 == c:
+                intersections.extend([float(y1), float(y2)])
+                continue
+            if x1 == x2:
+                continue
+            t = (c - x1) / (x2 - x1)
+            if 0.0 <= t <= 1.0:
+                intersections.append(float(y1 + t * (y2 - y1)))
 
         if not intersections:
             return []
@@ -239,33 +238,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         rounded = np.round(np.asarray(intersections, dtype=float), 3)
         return np.unique(rounded).astype(float).tolist()
 
-    @staticmethod
-    def _line_segment_through_center(height, width, angle_degrees):
-        cx = 0.5 * (float(width) - 1.0)
-        cy = 0.5 * (float(height) - 1.0)
-        theta = np.deg2rad(float(angle_degrees) % 360.0)
-        direction = np.asarray([np.cos(theta), np.sin(theta)], dtype=float)
-
-        tx_min, tx_max = -np.inf, np.inf
-        ty_min, ty_max = -np.inf, np.inf
-
-        if abs(direction[0]) > 1e-8:
-            tx1 = (0.0 - cx) / direction[0]
-            tx2 = (float(width) - 1.0 - cx) / direction[0]
-            tx_min, tx_max = min(tx1, tx2), max(tx1, tx2)
-
-        if abs(direction[1]) > 1e-8:
-            ty1 = (0.0 - cy) / direction[1]
-            ty2 = (float(height) - 1.0 - cy) / direction[1]
-            ty_min, ty_max = min(ty1, ty2), max(ty1, ty2)
-
-        t_min = max(tx_min, ty_min)
-        t_max = min(tx_max, ty_max)
-
-        p0 = np.asarray([cx, cy], dtype=float) + t_min * direction
-        p1 = np.asarray([cx, cy], dtype=float) + t_max * direction
-        return p0, p1
-
     @classmethod
     def _sample_volume_along_segment(
         cls,
@@ -321,7 +293,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 if axis in LINE_AXES:
                     values = self._contour_intersections_with_line_segment(contour, line_start, line_end)
                 else:
-                    values = self._contour_intersections_with_slice(contour, axis, slice_index)
+                    values = self._contour_intersections_with_slice(contour, slice_index)
                 for value in values:
                     if axis in LINE_AXES and line_length is not None and line_length > 1e-6:
                         full_size = max(2, int(free_full_size if free_full_size is not None else image_size))
@@ -329,61 +301,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         value = float(value) * float(full_size - 1) / float(line_length)
                         # Clip into displayed row coordinates when we crop to frame width.
                         value = float(value) - float(free_clip_offset)
-                    y = float(np.clip(max_y - value, 0.0, max_y))
+                        y = float(np.clip(max_y - value, 0.0, max_y))
+                    else:
+                        # Vertical slice rows are flipped (upside down), so row index maps directly.
+                        y = float(np.clip(value, 0.0, max_y))
                     points.append((float(frame_idx), y))
         return points
 
-    def _build_axis_cross_section_slice(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
+    def _build_vertical_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
         _, height, width = base_volume.shape
-        if axis == "y":
-            slice_index = height // 2
-            cross_section = base_volume[:, slice_index, :].T
-            image_size = width
-        else:
-            slice_index = width // 2
-            cross_section = base_volume[:, :, slice_index].T
-            image_size = height
+        slice_index = width // 2
+        # Flip rows so the cross-section is shown upside down.
+        cross_section = base_volume[:, :, slice_index].T[::-1]
 
         return {
             "slice_index": slice_index,
             "cross_section": cross_section,
-            "image_size": image_size,
+            "image_size": height,
             "line_start": None,
             "line_end": None,
             "line_length": None,
             "free_full_size": None,
             "free_clip_offset": 0.0,
-        }
-
-    def _build_free_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
-        _, height, width = base_volume.shape
-        angle_degrees = float(self.angleSlider.value())
-        line_start, line_end = self._line_segment_through_center(height, width, angle_degrees)
-        line_length = float(np.linalg.norm(line_end - line_start))
-        full_samples = max(2, int(np.ceil(line_length)) + 1)
-        full_cross_section = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
-
-        target_size = max(2, int(width))
-        if full_samples > target_size:
-            start = int((full_samples - target_size) // 2)
-            end = start + target_size
-            cross_section = full_cross_section[start:end, :]
-            image_size = target_size
-            free_clip_offset = float(start)
-        else:
-            cross_section = full_cross_section
-            image_size = full_samples
-            free_clip_offset = 0.0
-
-        return {
-            "slice_index": None,
-            "cross_section": cross_section,
-            "image_size": image_size,
-            "line_start": line_start,
-            "line_end": line_end,
-            "line_length": line_length,
-            "free_full_size": full_samples,
-            "free_clip_offset": free_clip_offset,
         }
 
     def _build_custom_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
@@ -408,11 +347,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         }
 
     def _build_cross_section_slice_context(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
-        if axis in {"x", "y"}:
-            return self._build_axis_cross_section_slice(base_volume, axis)
         if axis == "custom":
             return self._build_custom_cross_section_slice(base_volume)
-        return self._build_free_cross_section_slice(base_volume)
+        return self._build_vertical_cross_section_slice(base_volume)
 
     def update_cross_section_view(self):
         base_volume = self.cross_section_volume
@@ -562,6 +499,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.key_frames.remove(selected_frame)
         for frame_map in self.key_frame_points.values():
             frame_map.pop(selected_frame, None)
+        for frame_map in self.key_frame_outlines.values():
+            frame_map.pop(selected_frame, None)
         self._invalidate_segmentation()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
@@ -575,6 +514,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         count = len(self.key_frames)
         self.key_frames.clear()
         self.key_frame_points.clear()
+        self.key_frame_outlines.clear()
         self._invalidate_segmentation()
         self.keyFramesListView.clearSelection()
         self.refresh_key_frames_list()
@@ -586,6 +526,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         obj_id = self._active_obj_id()
         if frame not in self.key_frames:
             self.show_status("Current frame is not a key frame.")
+            return
+
+        if self.customMaskCheckBox.isChecked():
+            self._on_outline_clicked(frame, obj_id, x, y, action)
             return
 
         changed = False
@@ -614,6 +558,85 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             f"Removed object {obj_id} point at ({closest[0]}, {closest[1]}) from frame {frame}"
         )
         return True
+
+    def _on_outline_clicked(self, frame, obj_id, x, y, action):
+        if action == "delete":
+            changed = self._remove_nearest_outline_vertex(frame, obj_id, x, y)
+        elif action == "negative":
+            changed = self._insert_outline_vertex(frame, x, y)
+        else:
+            vertices = self.key_frame_outlines.setdefault(obj_id, {}).setdefault(frame, [])
+            vertices.append([x, y])
+            self.show_status(
+                f"Added outline vertex {len(vertices)} for object {obj_id} at ({x}, {y}) on frame {frame}"
+            )
+            changed = True
+        if changed:
+            self._invalidate_segmentation()
+        self.refresh_point_overlay()
+
+    def _insert_outline_vertex(self, frame, x, y):
+        """Insert a vertex between the two outline vertices of the nearest edge."""
+        best = None  # (distance_sq, obj_id, edge_start_index)
+        for obj_id, frame_map in self.key_frame_outlines.items():
+            vertices = frame_map.get(frame, [])
+            count = len(vertices)
+            if count < 2:
+                continue
+            for index in range(count):
+                start = vertices[index]
+                end = vertices[(index + 1) % count]
+                dist_sq = point_segment_distance_sq((x, y), start, end)
+                if best is None or dist_sq < best[0]:
+                    best = (dist_sq, obj_id, index)
+        if best is None:
+            self.show_status("Need at least two outline vertices on this frame to insert a vertex.")
+            return False
+        _, obj_id, index = best
+        self.key_frame_outlines[obj_id][frame].insert(index + 1, [x, y])
+        self.show_status(f"Inserted outline vertex at ({x}, {y}) for object {obj_id} on frame {frame}")
+        return True
+
+    def _on_outline_handle_pressed(self, handle_index):
+        self._outline_drag = (*self._outline_refs[handle_index], self.imageView.currentIndex)
+
+    def _on_outline_handle_moved(self, x, y):
+        if self._outline_drag is None:
+            return
+        obj_id, vertex_index, frame = self._outline_drag
+        height, width = self.cross_section_volume.shape[-2:]
+        x = min(max(x, 0), width - 1)
+        y = min(max(y, 0), height - 1)
+        self.key_frame_outlines[obj_id][frame][vertex_index] = [x, y]
+        self.refresh_point_overlay(frame)
+
+    def _on_outline_handle_released(self):
+        if self._outline_drag is None:
+            return
+        self._outline_drag = None
+        self._invalidate_segmentation()
+        self.refresh_point_overlay()
+        self.show_status("Outline vertex moved")
+
+    def _remove_nearest_outline_vertex(self, frame, obj_id, x, y):
+        vertices = self.key_frame_outlines.get(obj_id, {}).get(frame, [])
+        if not vertices:
+            self.show_status(f"No outline vertices to remove for object {obj_id} on this key frame.")
+            return False
+        closest = min(vertices, key=lambda v: (v[0] - x) ** 2 + (v[1] - y) ** 2)
+        vertices.remove(closest)
+        self.show_status(f"Removed outline vertex at ({closest[0]}, {closest[1]}) from frame {frame}")
+        return True
+
+    def clear_outline(self):
+        frame = self.imageView.currentIndex
+        obj_id = self._active_obj_id()
+        if self.key_frame_outlines.get(obj_id, {}).pop(frame, None) is None:
+            self.show_status(f"No outline for object {obj_id} on this frame.")
+            return
+        self._invalidate_segmentation()
+        self.refresh_point_overlay()
+        self.show_status(f"Cleared outline for object {obj_id} on frame {frame}")
 
     def refresh_point_overlay(self, frame=None):
         if frame is None:
@@ -644,6 +667,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.segmentation_spline_nodes is not None:
             frame_nodes = self.segmentation_spline_nodes.get(frame, [])
         self.imageView.set_spline_nodes(frame_nodes)
+        outline_curves = []
+        outline_vertices = []
+        self._outline_refs = []
+        for obj_id, frame_map in self.key_frame_outlines.items():
+            vertices = frame_map.get(frame, [])
+            if len(vertices) >= 4:
+                outline_curves.append(sample_outline_curve(vertices))
+            outline_vertices.extend(vertices)
+            self._outline_refs.extend((obj_id, index) for index in range(len(vertices)))
+        self.imageView.set_outline(outline_curves, outline_vertices)
 
     def _update_overlay_visibility(self):
         show_points = not self.hidePointsCheckBox.isChecked()
@@ -774,6 +807,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         positive=("true" if pt[2] else "false"),
                         obj_id=str(obj_id),
                     )
+            for obj_id, frame_map in self.key_frame_outlines.items():
+                vertices = frame_map.get(frame_idx, [])
+                if not vertices:
+                    continue
+                outline_el = ET.SubElement(kf_el, "outline", obj_id=str(obj_id))
+                for vertex in vertices:
+                    ET.SubElement(outline_el, "vertex", x=str(vertex[0]), y=str(vertex[1]))
         tree = ET.ElementTree(root)
         ET.indent(tree, space="  ")
         tree.write(path, encoding="unicode", xml_declaration=True)
@@ -796,10 +836,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 raise ValueError("Not a valid key frames file.")
             self.key_frames.clear()
             self.key_frame_points.clear()
+            self.key_frame_outlines.clear()
             for kf_el in root.findall("keyframe"):
                 frame_idx = int(kf_el.get("index"))
                 if frame_idx not in self.key_frames:
                     self.key_frames.append(frame_idx)
+                for outline_el in kf_el.findall("outline"):
+                    obj_id = int(outline_el.get("obj_id"))
+                    vertices = [
+                        [int(vertex_el.get("x")), int(vertex_el.get("y"))]
+                        for vertex_el in outline_el.findall("vertex")
+                    ]
+                    if vertices:
+                        self.key_frame_outlines.setdefault(obj_id, {})[frame_idx] = vertices
                 for pt_el in kf_el.findall("point"):
                     x = pt_el.get("x")
                     y = pt_el.get("y")
@@ -1121,6 +1170,76 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         )
         self._finalize_segmentation_result(mask, 0, self._frame_count() - 1, obj_points.keys())
 
+    def _custom_masks_for_frame(self, frame_idx):
+        height, width = self.cross_section_volume.shape[-2:]
+        masks = {}
+        for obj_id, frame_map in self.key_frame_outlines.items():
+            vertices = frame_map.get(frame_idx, [])
+            if len(vertices) >= 4:
+                masks[int(obj_id)] = build_custom_mask(vertices, height, width)
+        return masks
+
+    def track_custom_mask(self):
+        if not self._ensure_ready_for_segmentation():
+            return
+
+        frame_idx = self._selected_key_frame()
+        if frame_idx is None:
+            self.show_status("Select a key frame for custom mask tracking.")
+            return
+
+        masks_by_obj = self._custom_masks_for_frame(frame_idx)
+        if not masks_by_obj:
+            self.show_status(f"Key frame {frame_idx} has no custom mask outline with at least 4 vertices.")
+            return
+
+        sorted_kf = sorted(set(self.key_frames))
+        start_pos = sorted_kf.index(frame_idx)
+        end_forward = (
+            sorted_kf[start_pos + 1]
+            if start_pos + 1 < len(sorted_kf)
+            else self._frame_count() - 1
+        )
+        end_backward = sorted_kf[start_pos - 1] if start_pos > 0 else 0
+        obj_ids = list(masks_by_obj.keys())
+        percentile_clip = self._percentile_clip_from_ui()
+
+        backward_mask = self._run_segmentation(
+            "Tracking custom mask backward...",
+            f"Backward custom mask tracking done ({frame_idx}->{end_backward}).",
+            lambda: self.segmenter.segment_mask_range_multi_object(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                start_frame_idx=frame_idx,
+                end_frame_idx=end_backward,
+                start_frame_masks_by_obj=masks_by_obj,
+                percentile_clip=percentile_clip,
+                reverse=True,
+                progress_callback=self._update_segmentation_progress,
+            )
+        )
+        if backward_mask is None:
+            return
+        self._finalize_segmentation_result(backward_mask, end_backward, frame_idx, obj_ids)
+
+        forward_mask = self._run_segmentation(
+            "Tracking custom mask forward...",
+            f"Forward custom mask tracking done ({frame_idx}->{end_forward}). Mask overlay updated.",
+            lambda: self.segmenter.segment_mask_range_multi_object(
+                pixel_array=self.pixel_array,
+                dicom_ds=self.dicom_dataset,
+                start_frame_idx=frame_idx,
+                end_frame_idx=end_forward,
+                start_frame_masks_by_obj=masks_by_obj,
+                percentile_clip=percentile_clip,
+                reverse=False,
+                progress_callback=self._update_segmentation_progress,
+            )
+        )
+        if forward_mask is None:
+            return
+        self._finalize_segmentation_result(forward_mask, frame_idx, end_forward, obj_ids)
+
     def fix_masks(self):
         if self.segmentation_mask is None:
             self.show_status("No segmentation mask available. Run segmentation first.")
@@ -1241,6 +1360,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.imageView.set_spline_nodes([])
                 self.key_frames.clear()
                 self.key_frame_points.clear()
+                self.key_frame_outlines.clear()
                 self.refresh_key_frames_list()
                 self.refresh_point_overlay()
                 self.update_cross_section_view()

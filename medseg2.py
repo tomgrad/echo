@@ -145,17 +145,32 @@ class MedSam2Segmenter:
     def _binary_mask_for_obj(label_volume: np.ndarray, obj_id: int) -> np.ndarray:
         return (np.asarray(label_volume) == int(obj_id)).astype(np.uint8)
 
-    def _apply_prompts_on_frame(self, inference_state, frame_idx: int, obj_points: Dict[int, Sequence[Sequence[int]]]):
+    def _apply_prompts_on_frame(
+        self,
+        inference_state,
+        frame_idx: int,
+        obj_points: Dict[int, Sequence[Sequence[int]]],
+        obj_masks: Optional[Dict[int, np.ndarray]] = None,
+    ):
+        obj_masks = obj_masks or {}
         frame_mask = None
-        for obj_id, points in sorted(obj_points.items()):
-            coords, labels = self._prompt_from_points(points)
-            _, out_obj_ids, out_mask_logits = self._predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=int(frame_idx),
-                obj_id=int(obj_id),
-                points=coords,
-                labels=labels,
-            )
+        for obj_id in sorted(set(obj_points) | set(obj_masks)):
+            if obj_id in obj_masks:
+                _, out_obj_ids, out_mask_logits = self._predictor.add_new_mask(
+                    inference_state=inference_state,
+                    frame_idx=int(frame_idx),
+                    obj_id=int(obj_id),
+                    mask=np.asarray(obj_masks[obj_id], dtype=bool),
+                )
+            else:
+                coords, labels = self._prompt_from_points(obj_points[obj_id])
+                _, out_obj_ids, out_mask_logits = self._predictor.add_new_points_or_box(
+                    inference_state=inference_state,
+                    frame_idx=int(frame_idx),
+                    obj_id=int(obj_id),
+                    points=coords,
+                    labels=labels,
+                )
             frame_mask = self._frame_from_logits(out_obj_ids, out_mask_logits)
 
         if frame_mask is None:
@@ -171,9 +186,12 @@ class MedSam2Segmenter:
         start_frame_points_by_obj: Dict[int, Sequence[Sequence[int]]],
         percentile_clip: Tuple[float, float] = (0.5, 99.5),
         reverse: bool = False,
+        start_frame_masks_by_obj: Optional[Dict[int, np.ndarray]] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> np.ndarray:
-        if not start_frame_points_by_obj:
+        points_by_obj = {int(obj_id): points for obj_id, points in start_frame_points_by_obj.items() if points}
+        masks_by_obj = {int(obj_id): mask for obj_id, mask in (start_frame_masks_by_obj or {}).items()}
+        if not points_by_obj and not masks_by_obj:
             raise ValueError("At least one object prompt set is required.")
         if reverse:
             if start_frame_idx < end_frame_idx:
@@ -188,11 +206,8 @@ class MedSam2Segmenter:
 
         prep = self._prepare_volume(pixel_array, dicom_ds, percentile_clip=percentile_clip)
         segs_3d = np.zeros((prep.vol_u8.shape[0], prep.height, prep.width), dtype=np.uint16)
-        prompt_items = sorted((int(obj_id), points) for obj_id, points in start_frame_points_by_obj.items() if points)
-        if not prompt_items:
-            raise ValueError("No prompt points available for multi-object propagation.")
-
-        total = len(prompt_items) + total_frames
+        prompt_obj_ids = sorted(set(points_by_obj) | set(masks_by_obj))
+        total = len(prompt_obj_ids) + total_frames
         processed = set()
         if progress_callback is not None:
             progress_callback(0, total, "Initializing")
@@ -200,11 +215,16 @@ class MedSam2Segmenter:
         with self.torch.inference_mode(), self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             inference_state = self._predictor.init_state(prep.img_t, prep.height, prep.width)
             prompt_count = 0
-            for obj_id, points in prompt_items:
+            for obj_id in prompt_obj_ids:
+                if obj_id in masks_by_obj:
+                    obj_points, obj_masks = {}, {obj_id: masks_by_obj[obj_id]}
+                else:
+                    obj_points, obj_masks = {obj_id: points_by_obj[obj_id]}, {}
                 segs_3d[start_frame_idx] = self._apply_prompts_on_frame(
                     inference_state,
                     start_frame_idx,
-                    {obj_id: points},
+                    obj_points,
+                    obj_masks,
                 )
                 prompt_count += 1
                 if progress_callback is not None:
@@ -362,6 +382,29 @@ class MedSam2Segmenter:
             start_frame_points_by_obj=start_frame_points_by_obj,
             percentile_clip=percentile_clip,
             reverse=True,
+            progress_callback=progress_callback,
+        )
+
+    def segment_mask_range_multi_object(
+        self,
+        pixel_array: np.ndarray,
+        dicom_ds,
+        start_frame_idx: int,
+        end_frame_idx: int,
+        start_frame_masks_by_obj: Dict[int, np.ndarray],
+        percentile_clip: Tuple[float, float] = (0.5, 99.5),
+        reverse: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> np.ndarray:
+        return self._segment_multi_object_range(
+            pixel_array=pixel_array,
+            dicom_ds=dicom_ds,
+            start_frame_idx=start_frame_idx,
+            end_frame_idx=end_frame_idx,
+            start_frame_points_by_obj={},
+            start_frame_masks_by_obj=start_frame_masks_by_obj,
+            percentile_clip=percentile_clip,
+            reverse=reverse,
             progress_callback=progress_callback,
         )
 

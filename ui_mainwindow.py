@@ -18,9 +18,8 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QListView, QMainWindow, QMenuBar,
-    QPushButton, QSizePolicy, QSlider, QSpacerItem,
-    QSpinBox, QSplitter, QStatusBar, QVBoxLayout,
-    QWidget)
+    QPushButton, QSizePolicy, QSpacerItem, QSpinBox,
+    QSplitter, QStatusBar, QVBoxLayout, QWidget)
 
 from crosssectionview import CrossSectionView
 from imageview import ImageView
@@ -176,15 +175,6 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.crossSectionComboBox, 7, 0, 1, 1)
 
-        self.angleSlider = QSlider(self.groupBox_4)
-        self.angleSlider.setObjectName(u"angleSlider")
-        self.angleSlider.setMaximum(180)
-        self.angleSlider.setOrientation(Qt.Orientation.Horizontal)
-        self.angleSlider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.angleSlider.setTickInterval(45)
-
-        self.gridLayout_4.addWidget(self.angleSlider, 7, 1, 1, 2)
-
 
         self.verticalLayout.addWidget(self.groupBox_4)
 
@@ -251,6 +241,21 @@ class Ui_MainWindow(object):
         self.segRangeButton.setObjectName(u"segRangeButton")
 
         self.gridLayout_2.addWidget(self.segRangeButton, 0, 2, 1, 1)
+
+        self.customMaskCheckBox = QCheckBox(self.groupBox_2)
+        self.customMaskCheckBox.setObjectName(u"customMaskCheckBox")
+
+        self.gridLayout_2.addWidget(self.customMaskCheckBox, 2, 0, 1, 1)
+
+        self.clearOutlineButton = QPushButton(self.groupBox_2)
+        self.clearOutlineButton.setObjectName(u"clearOutlineButton")
+
+        self.gridLayout_2.addWidget(self.clearOutlineButton, 2, 1, 1, 1)
+
+        self.trackMaskButton = QPushButton(self.groupBox_2)
+        self.trackMaskButton.setObjectName(u"trackMaskButton")
+
+        self.gridLayout_2.addWidget(self.trackMaskButton, 2, 2, 1, 2)
 
         self.label_6 = QLabel(self.groupBox_2)
         self.label_6.setObjectName(u"label_6")
@@ -417,6 +422,18 @@ class Ui_MainWindow(object):
         self.segRangeButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment from selected keyframe to next keyframe</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.segRangeButton.setText(QCoreApplication.translate("MainWindow", u"\u27a1\ufe0f forward", None))
+#if QT_CONFIG(tooltip)
+        self.customMaskCheckBox.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Custom mask outline on the selected keyframe. Click adds a vertex, drag a vertex to move it, Shift-click inserts a vertex on the nearest edge, Ctrl-click removes the nearest vertex.</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.customMaskCheckBox.setText(QCoreApplication.translate("MainWindow", u"custom mask", None))
+#if QT_CONFIG(tooltip)
+        self.clearOutlineButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Clear the custom mask outline of the active object on this frame</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.clearOutlineButton.setText(QCoreApplication.translate("MainWindow", u"clear outline", None))
+#if QT_CONFIG(tooltip)
+        self.trackMaskButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Track custom mask outlines from selected keyframe backward and forward</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.trackMaskButton.setText(QCoreApplication.translate("MainWindow", u"track mask", None))
         self.label_6.setText(QCoreApplication.translate("MainWindow", u"clip", None))
 #if QT_CONFIG(tooltip)
         self.segSingleButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Segment selected keyframe</p></body></html>", None))

@@ -211,22 +211,6 @@
           <item row="7" column="0">
            <widget class="QComboBox" name="crossSectionComboBox"/>
           </item>
-          <item row="7" column="1" colspan="2">
-           <widget class="QSlider" name="angleSlider">
-            <property name="maximum">
-             <number>180</number>
-            </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
-            <property name="tickPosition">
-             <enum>QSlider::TickPosition::TicksBelow</enum>
-            </property>
-            <property name="tickInterval">
-             <number>45</number>
-            </property>
-           </widget>
-          </item>
          </layout>
         </widget>
        </item>
@@ -335,6 +319,36 @@
             </property>
             <property name="text">
              <string>➡️ forward</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QCheckBox" name="customMaskCheckBox">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Custom mask outline on the selected keyframe. Click adds a vertex, drag a vertex to move it, Shift-click inserts a vertex on the nearest edge, Ctrl-click removes the nearest vertex.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="text">
+             <string>custom mask</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QPushButton" name="clearOutlineButton">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Clear the custom mask outline of the active object on this frame&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="text">
+             <string>clear outline</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2" colspan="2">
+           <widget class="QPushButton" name="trackMaskButton">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Track custom mask outlines from selected keyframe backward and forward&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="text">
+             <string>track mask</string>
             </property>
            </widget>
           </item>
