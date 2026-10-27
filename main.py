@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 import importlib
 import traceback
 import re
+import pickle
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.saveKeyFramesButton.clicked.connect(self.save_key_frames)
         self.loadKeyFramesButton.clicked.connect(self.load_key_frames)
         self.exportMasksButton.clicked.connect(self.save_masks)
+        self.exportContoursButton.clicked.connect(self.save_contours)
         self.playButton.clicked.connect(self.toggle_playback)
         self.segSingleButton.clicked.connect(self.segment_selected_keyframe)
         self.segRangeButton.clicked.connect(self.segment_keyframe_forward)
@@ -966,6 +968,25 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         np.save(output_path, self.segmentation_mask.astype(np.uint16))
         self.show_status(f"Saved masks to {output_path}", 6000)
+
+    def save_contours(self):
+        if self.segmentation_contours is None:
+            self.show_status("No contours available. Extract contours first.")
+            return
+
+        if self.dicom_file_path:
+            dicom_stem = Path(self.dicom_file_path).stem
+        else:
+            dicom_stem = "dicom"
+
+        output_dir = Path(__file__).resolve().parent / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{dicom_stem}_contours.pkl"
+
+        with output_path.open("wb") as handle:
+            pickle.dump(self.segmentation_contours, handle)
+
+        self.show_status(f"Saved contours to {output_path}", 6000)
 
     def _ensure_segmenter(self):
         engine_key = self._selected_engine_key()
