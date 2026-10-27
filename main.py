@@ -3,15 +3,13 @@ import xml.etree.ElementTree as ET
 import traceback
 import json
 from pathlib import Path
-from contextlib import redirect_stderr, redirect_stdout
-import io
 from typing import Any
 import numpy as np
 import pydicom
 from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
-from medseg2 import MedSam2Segmenter
+from medseg2 import MedSam2Segmenter, configure_torch_for_inference
 from mask_processing import (
     build_custom_mask,
     contours_to_jsonable,
@@ -40,18 +38,10 @@ class SegmentationWorker(QThread):
         self._work_fn = work_fn
 
     def run(self):
-        out_buf = io.StringIO()
-        err_buf = io.StringIO()
         try:
-            with redirect_stdout(out_buf), redirect_stderr(err_buf):
-                result = self._work_fn(self.progress.emit)
+            result = self._work_fn(self.progress.emit)
         except Exception as exc:
-            self.failed.emit(MainWindow._format_segmentation_error(
-                exc,
-                stdout_text=out_buf.getvalue(),
-                stderr_text=err_buf.getvalue(),
-                traceback_text=traceback.format_exc(),
-            ))
+            self.failed.emit(MainWindow._format_segmentation_error(exc, traceback.format_exc()))
             return
         self.succeeded.emit(result)
 
@@ -1066,18 +1056,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_mask[frame_slice] = existing
 
     @staticmethod
-    def _format_segmentation_error(exc, stdout_text="", stderr_text="", traceback_text=""):
-        base_message = str(exc).strip()
-        if not base_message:
-            base_message = f"{exc.__class__.__name__} (no message)"
-
-        details = stderr_text.strip() or stdout_text.strip() or traceback_text.strip()
+    def _format_segmentation_error(exc, traceback_text=""):
+        base_message = str(exc).strip() or f"{exc.__class__.__name__} (no message)"
+        details = traceback_text.strip()
         if not details:
             return base_message
-
         # Keep dialog readable and bounded for large backend traces.
-        details_tail = details[-4000:]
-        return f"{base_message}\n\nBackend details:\n{details_tail}"
+        return f"{base_message}\n\nDetails:\n{details[-4000:]}"
 
     def _run_segmentation(self, start_message, finish_message, segment_fn, on_done,
                           needs_segmenter=True, indeterminate=False):
@@ -1491,6 +1476,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 
 if __name__ == "__main__":
+    configure_torch_for_inference()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
