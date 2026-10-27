@@ -8,7 +8,7 @@ import io
 from typing import Any
 import numpy as np
 import pydicom
-from PySide6.QtCore import QStringListModel, QTimer
+from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
 from medseg2 import MedSam2Segmenter
@@ -27,6 +27,34 @@ FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no li
 MEDSAM2_MODEL_CFG = "configs/sam2.1_hiera_t512.yaml"
 
 
+class SegmentationWorker(QThread):
+    """Runs one segmentation call off the GUI thread and reports back through signals."""
+
+    progress = Signal(int, int, str)
+    succeeded = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, work_fn, parent=None):
+        super().__init__(parent)
+        self._work_fn = work_fn
+
+    def run(self):
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        try:
+            with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                result = self._work_fn(self.progress.emit)
+        except Exception as exc:
+            self.failed.emit(MainWindow._format_segmentation_error(
+                exc,
+                stdout_text=out_buf.getvalue(),
+                stderr_text=err_buf.getvalue(),
+                traceback_text=traceback.format_exc(),
+            ))
+            return
+        self.succeeded.emit(result)
+
+
 class MainWindow(QMainWindow, Ui_MainWindow):
 
     def __init__(self):
@@ -36,6 +64,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.medsam2_checkpoints_dir = self.checkpoints_root_dir / "MedSAM2"
 
         self.pixel_array = None
+        self.is_color = False
+        self._worker = None
         # Grayscale (frames, rows, cols) volume used by the cross-section view.
         self.cross_section_volume = None
         self.dicom_dataset = None
@@ -395,7 +425,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.seg_progress_bar.setFormat("0%")
         self.seg_progress_bar.setVisible(True)
         self.statusbar.showMessage(message, 0)
-        QApplication.processEvents()
 
     def _update_segmentation_progress(self, done, total, stage):
         total = max(1, int(total))
@@ -404,13 +433,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.seg_progress_bar.setValue(percent)
         self.seg_progress_bar.setFormat(f"{percent}%")
         self.statusbar.showMessage(f"{stage}: {done}/{total}", 0)
-        QApplication.processEvents()
 
     def _finish_segmentation_progress(self, message):
         self.seg_progress_bar.setValue(100)
         self.seg_progress_bar.setFormat("100%")
         self.statusbar.showMessage(message, 4000)
-        QApplication.processEvents()
         self.seg_progress_bar.setVisible(False)
 
     def _create_segmenter_for_selection(self, checkpoint_path):
@@ -469,6 +496,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def closeEvent(self, event):
         self.stop_playback()
+        if self._worker is not None:
+            # Let the running segmentation finish instead of killing the thread.
+            self._worker.wait()
         self._release_segmenter()
         super().closeEvent(event)
 
@@ -700,7 +730,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _frame_count(self):
         if self.pixel_array is None:
             return 0
-        return self.pixel_array.shape[0] if self.pixel_array.ndim > 2 else 1
+        # Color frames carry a trailing RGB axis, so a 3D array is one frame.
+        frame_ndim = 4 if self.is_color else 3
+        return self.pixel_array.shape[0] if self.pixel_array.ndim >= frame_ndim else 1
 
     def _update_play_timer_interval(self, fps):
         interval_ms = max(1, int(1000 / max(1, fps)))
@@ -1027,32 +1059,53 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         details_tail = details[-4000:]
         return f"{base_message}\n\nBackend details:\n{details_tail}"
 
-    def _run_segmentation(self, start_message, finish_message, segment_fn):
-        try:
-            self._ensure_segmenter()
-            self._start_segmentation_progress(start_message)
-            out_buf = io.StringIO()
-            err_buf = io.StringIO()
-            with redirect_stdout(out_buf), redirect_stderr(err_buf):
-                mask = segment_fn()
-            self._finish_segmentation_progress(finish_message)
-            return mask
-        except Exception as exc:
-            self.seg_progress_bar.setVisible(False)
-            out_text = out_buf.getvalue() if "out_buf" in locals() else ""
-            err_text = err_buf.getvalue() if "err_buf" in locals() else ""
-            trace_text = traceback.format_exc()
-            QMessageBox.critical(
-                self,
-                "Segmentation error",
-                self._format_segmentation_error(
-                    exc,
-                    stdout_text=out_text,
-                    stderr_text=err_text,
-                    traceback_text=trace_text,
-                ),
-            )
-            return None
+    def _run_segmentation(self, start_message, finish_message, segment_fn, on_done, needs_segmenter=True):
+        """Run segment_fn(segmenter, progress) on a worker thread, then on_done(result) on the GUI thread.
+
+        The central widget is disabled while the worker runs, so the user cannot edit
+        key frames or points mid-run. on_done may start another run (chained stages).
+        """
+        if self._worker is not None:
+            self.show_status("A segmentation is already running.")
+            return
+        segmenter = None
+        if needs_segmenter:
+            try:
+                self._ensure_segmenter()
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Segmentation error",
+                    self._format_segmentation_error(exc, traceback_text=traceback.format_exc()),
+                )
+                return
+            segmenter = self.segmenter
+        self.stop_playback()
+        self._start_segmentation_progress(start_message)
+        self.centralWidget().setEnabled(False)
+        worker = SegmentationWorker(lambda progress: segment_fn(segmenter, progress), self)
+        worker.progress.connect(self._update_segmentation_progress)
+        worker.succeeded.connect(lambda result: self._on_segmentation_succeeded(result, finish_message, on_done))
+        worker.failed.connect(self._on_segmentation_failed)
+        worker.finished.connect(lambda: self._on_worker_finished(worker))
+        self._worker = worker
+        worker.start()
+
+    def _on_segmentation_succeeded(self, result, finish_message, on_done):
+        self._worker = None
+        self._finish_segmentation_progress(finish_message)
+        on_done(result)
+
+    def _on_segmentation_failed(self, message):
+        self._worker = None
+        self.seg_progress_bar.setVisible(False)
+        QMessageBox.critical(self, "Segmentation error", message)
+
+    def _on_worker_finished(self, worker):
+        worker.deleteLater()
+        # A chained run may already be active; only re-enable the UI when nothing is.
+        if self._worker is None:
+            self.centralWidget().setEnabled(True)
 
     def segment_selected_keyframe(self):
         if not self._ensure_ready_for_segmentation():
@@ -1066,19 +1119,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         percentile_clip = self._percentile_clip_from_ui()
 
-        mask = self._run_segmentation(
+        self._run_segmentation(
             "Running multi-object single-frame segmentation...",
             "Single-frame segmentation done for all prompted objects. Mask overlay updated.",
-            lambda: self.segmenter.segment_single_keyframe_multi_object(
+            lambda segmenter, progress: segmenter.segment_single_keyframe_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 frame_idx=frame_idx,
                 frame_points_by_obj=points_by_object,
                 percentile_clip=percentile_clip,
-                progress_callback=self._update_segmentation_progress,
-            )
+                progress_callback=progress,
+            ),
+            lambda mask: self._finalize_segmentation_result(mask, frame_idx, frame_idx, points_by_object.keys()),
         )
-        self._finalize_segmentation_result(mask, frame_idx, frame_idx, points_by_object.keys())
 
     def segment_keyframe_forward(self):
         if not self._ensure_ready_for_segmentation():
@@ -1100,20 +1153,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         percentile_clip = self._percentile_clip_from_ui()
 
-        mask = self._run_segmentation(
+        self._run_segmentation(
             "Running multi-object forward range segmentation...",
             f"Forward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
-            lambda: self.segmenter.segment_forward_range_multi_object(
+            lambda segmenter, progress: segmenter.segment_forward_range_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
                 start_frame_points_by_obj=points_by_object,
                 percentile_clip=percentile_clip,
-                progress_callback=self._update_segmentation_progress,
-            )
+                progress_callback=progress,
+            ),
+            lambda mask: self._finalize_segmentation_result(mask, frame_idx, end_frame, points_by_object.keys()),
         )
-        self._finalize_segmentation_result(mask, frame_idx, end_frame, points_by_object.keys())
 
     def segment_keyframe_backward(self):
         if not self._ensure_ready_for_segmentation():
@@ -1135,20 +1188,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         percentile_clip = self._percentile_clip_from_ui()
 
-        mask = self._run_segmentation(
+        self._run_segmentation(
             "Running multi-object backward range segmentation...",
             f"Backward segmentation done for all prompted objects ({frame_idx}->{end_frame}). Mask overlay updated.",
-            lambda: self.segmenter.segment_backward_range_multi_object(
+            lambda segmenter, progress: segmenter.segment_backward_range_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 start_frame_idx=frame_idx,
                 end_frame_idx=end_frame,
                 start_frame_points_by_obj=points_by_object,
                 percentile_clip=percentile_clip,
-                progress_callback=self._update_segmentation_progress,
-            )
+                progress_callback=progress,
+            ),
+            lambda mask: self._finalize_segmentation_result(mask, end_frame, frame_idx, points_by_object.keys()),
         )
-        self._finalize_segmentation_result(mask, end_frame, frame_idx, points_by_object.keys())
 
     def segment_all_frames(self):
         if not self._ensure_ready_for_segmentation():
@@ -1164,19 +1217,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         percentile_clip = self._percentile_clip_from_ui()
 
-        mask = self._run_segmentation(
+        self._run_segmentation(
             "Running all-object segmentation...",
             "All-object segmentation done. Mask overlay updated.",
-            lambda: self.segmenter.segment_all_with_keyframes(
+            lambda segmenter, progress: segmenter.segment_all_with_keyframes(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
-                key_frames=self.key_frames,
+                key_frames=list(self.key_frames),
                 key_frame_points=obj_points,
                 percentile_clip=percentile_clip,
-                progress_callback=self._update_segmentation_progress,
-            )
+                progress_callback=progress,
+            ),
+            lambda mask: self._finalize_segmentation_result(mask, 0, self._frame_count() - 1, obj_points.keys()),
         )
-        self._finalize_segmentation_result(mask, 0, self._frame_count() - 1, obj_points.keys())
 
     def _custom_masks_for_frame(self, frame_idx):
         height, width = self.cross_section_volume.shape[-2:]
@@ -1212,10 +1265,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         obj_ids = list(masks_by_obj.keys())
         percentile_clip = self._percentile_clip_from_ui()
 
-        backward_mask = self._run_segmentation(
+        def run_forward():
+            self._run_segmentation(
+                "Tracking custom mask forward...",
+                f"Forward custom mask tracking done ({frame_idx}->{end_forward}). Mask overlay updated.",
+                lambda segmenter, progress: segmenter.segment_mask_range_multi_object(
+                    pixel_array=self.pixel_array,
+                    dicom_ds=self.dicom_dataset,
+                    start_frame_idx=frame_idx,
+                    end_frame_idx=end_forward,
+                    start_frame_masks_by_obj=masks_by_obj,
+                    percentile_clip=percentile_clip,
+                    reverse=False,
+                    progress_callback=progress,
+                ),
+                lambda mask: self._finalize_segmentation_result(mask, frame_idx, end_forward, obj_ids),
+            )
+
+        def finish_backward(mask):
+            self._finalize_segmentation_result(mask, end_backward, frame_idx, obj_ids)
+            run_forward()
+
+        self._run_segmentation(
             "Tracking custom mask backward...",
             f"Backward custom mask tracking done ({frame_idx}->{end_backward}).",
-            lambda: self.segmenter.segment_mask_range_multi_object(
+            lambda segmenter, progress: segmenter.segment_mask_range_multi_object(
                 pixel_array=self.pixel_array,
                 dicom_ds=self.dicom_dataset,
                 start_frame_idx=frame_idx,
@@ -1223,57 +1297,44 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 start_frame_masks_by_obj=masks_by_obj,
                 percentile_clip=percentile_clip,
                 reverse=True,
-                progress_callback=self._update_segmentation_progress,
-            )
+                progress_callback=progress,
+            ),
+            finish_backward,
         )
-        if backward_mask is None:
-            return
-        self._finalize_segmentation_result(backward_mask, end_backward, frame_idx, obj_ids)
-
-        forward_mask = self._run_segmentation(
-            "Tracking custom mask forward...",
-            f"Forward custom mask tracking done ({frame_idx}->{end_forward}). Mask overlay updated.",
-            lambda: self.segmenter.segment_mask_range_multi_object(
-                pixel_array=self.pixel_array,
-                dicom_ds=self.dicom_dataset,
-                start_frame_idx=frame_idx,
-                end_frame_idx=end_forward,
-                start_frame_masks_by_obj=masks_by_obj,
-                percentile_clip=percentile_clip,
-                reverse=False,
-                progress_callback=self._update_segmentation_progress,
-            )
-        )
-        if forward_mask is None:
-            return
-        self._finalize_segmentation_result(forward_mask, frame_idx, end_forward, obj_ids)
 
     def fix_masks(self):
         if self.segmentation_mask is None:
             self.show_status("No segmentation mask available. Run segmentation first.")
             return
 
-        iterations = int(self.smoothSpinBox.value())
-        self._start_segmentation_progress("Fixing masks...")
-
-        try:
-            fixed_mask = fix_labeled_mask(
-                self.segmentation_mask,
-                iterations,
-                progress_callback=lambda done, total: self._update_segmentation_progress(done, total, "Fixing masks"),
-            )
-        except ValueError:
-            self.seg_progress_bar.setVisible(False)
+        if self.segmentation_mask.ndim not in (2, 3):
             self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
             return
 
-        self.segmentation_mask = fixed_mask
-        self.segmentation_contours = None
-        self.segmentation_splines = None
-        self.segmentation_spline_nodes = None
-        self.update_cross_section_view()
-        self.refresh_point_overlay()
-        self._finish_segmentation_progress(f"Mask fixing complete (smooth level: {iterations}).")
+        iterations = int(self.smoothSpinBox.value())
+
+        def fix(_segmenter, progress):
+            return fix_labeled_mask(
+                self.segmentation_mask,
+                iterations,
+                progress_callback=lambda done, total: progress(done, total, "Fixing masks"),
+            )
+
+        def apply(fixed_mask):
+            self.segmentation_mask = fixed_mask
+            self.segmentation_contours = None
+            self.segmentation_splines = None
+            self.segmentation_spline_nodes = None
+            self.update_cross_section_view()
+            self.refresh_point_overlay()
+
+        self._run_segmentation(
+            "Fixing masks...",
+            f"Mask fixing complete (smooth level: {iterations}).",
+            fix,
+            apply,
+            needs_segmenter=False,
+        )
 
     def find_external_contours(self):
         if self.segmentation_mask is None:
@@ -1338,15 +1399,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             selected_files = file_dialog.selectedFiles()
             if selected_files:
                 dicom_file_path = selected_files[0]
+                try:
+                    dicom = pydicom.dcmread(dicom_file_path)
+                    pixel_array = dicom.pixel_array
+                except Exception as exc:
+                    QMessageBox.critical(self, "Load error", f"Could not read DICOM file:\n{exc}")
+                    return
                 self.dicom_file_path = dicom_file_path
-                dicom = pydicom.dcmread(dicom_file_path)
                 self.dicom_dataset = dicom
-                pixel_array = dicom.pixel_array
+                self.is_color = dicom.get("SamplesPerPixel", 1) > 1
                 if FRAMES_LIMIT > 0 and pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
                     pixel_array = pixel_array[:FRAMES_LIMIT]
                 self.pixel_array = pixel_array
                 self.imageView.remove_line()
-                if dicom.get("SamplesPerPixel", 1) > 1:
+                if self.is_color:
                     # Cross-section slices need one channel; use the mean of RGB.
                     self.cross_section_volume = pixel_array.mean(axis=-1, dtype=np.float32)
                 else:
@@ -1357,7 +1423,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.segmentation_spline_nodes = None
                 self.stop_playback()
                 # ImageView takes (x=col, y=row) axes. Swap rows/cols, keeping an RGB channel axis last.
-                if dicom.get("SamplesPerPixel", 1) > 1:
+                if self.is_color:
                     display_array = np.swapaxes(self.pixel_array, -3, -2)
                 else:
                     display_array = np.swapaxes(self.pixel_array, -2, -1)
