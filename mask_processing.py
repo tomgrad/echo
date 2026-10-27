@@ -10,6 +10,9 @@ def get_object_ids(mask: np.ndarray) -> list[int]:
 
 def _fix_single_binary_mask(mask_2d: np.ndarray, iterations: int) -> np.ndarray:
     fixed = ndimage.binary_fill_holes(mask_2d)
+    # scipy treats iterations < 1 as "repeat until stable", which erodes the mask away.
+    if iterations < 1:
+        return fixed.astype(np.uint8)
     fixed = ndimage.binary_erosion(fixed, iterations=iterations)
     fixed = ndimage.binary_dilation(fixed, iterations=iterations)
     return fixed.astype(np.uint8)
