@@ -2,3 +2,7 @@ __pycache__
 checkpoints
 *.ipynb
 output
+data
+.venv
+.zed
+.vscode
