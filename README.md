@@ -23,3 +23,9 @@ python main.py
 ## Roadmap
 
 - Phase 1: transition from the Medic (coronary) project. Done: SAM2 removed, MedSAM2 only.
+- Phase 2: add point tracking and custom mask tracking. Done: custom mask tracking (spline outlines per keyframe, tracked backward and forward with MedSAM2). Todo: point tracking (per-frame trajectory of clicked points).
+
+
+# Future Work
+- Phase TBD: add support for M-Mode and Doppler data.
+- Phase TBD: add support for 3D and Strain data.
