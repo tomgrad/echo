@@ -1,8 +1,12 @@
+import json
+
 import numpy as np
 import pytest
 
 from mask_processing import (
     build_custom_mask,
+    contours_from_jsonable,
+    contours_to_jsonable,
     find_external_contours,
     fit_spline_contours,
     fix_labeled_mask,
@@ -107,3 +111,13 @@ def test_build_custom_mask_fills_square_outline():
     assert mask[10, 10] == 1
     assert mask[0, 0] == 0
     assert mask.sum() > 50
+
+
+def test_contours_json_round_trip_keeps_frames_and_points():
+    contours = find_external_contours(_square_volume(frames=3), epsilon=0.0)
+    text = json.dumps(contours_to_jsonable(contours))
+    restored = contours_from_jsonable(json.loads(text))
+    assert sorted(restored) == [0, 1, 2]
+    for frame_idx in contours:
+        assert len(restored[frame_idx]) == len(contours[frame_idx])
+        assert np.array_equal(restored[frame_idx][0], contours[frame_idx][0])

@@ -103,22 +103,30 @@ class MedSam2Segmenter:
 
         height, width = vol_u8.shape[1:]
 
-        # Convert (D,H,W) -> (D,3,S,S) with bilinear resize.
-        v = self.torch.from_numpy(vol_u8).float().unsqueeze(1) / 255.0
-        v = v.repeat(1, 3, 1, 1)
-        v = self.torch.nn.functional.interpolate(
-            v,
-            size=(self.image_size, self.image_size),
-            mode="bilinear",
-            align_corners=False,
+        # Convert (D,H,W) -> (D,3,S,S) with bilinear resize, in chunks on the GPU so the
+        # full-resolution float volume never has to exist in host RAM.
+        img_mean = self.torch.tensor((0.485, 0.456, 0.406), dtype=self.torch.float32, device="cuda")
+        img_std = self.torch.tensor((0.229, 0.224, 0.225), dtype=self.torch.float32, device="cuda")
+        img_mean = img_mean[None, :, None, None]
+        img_std = img_std[None, :, None, None]
+        frame_count = vol_u8.shape[0]
+        img_t = self.torch.empty(
+            (frame_count, 3, self.image_size, self.image_size),
+            dtype=self.torch.float32,
+            device="cuda",
         )
-
-        img_mean = self.torch.tensor((0.485, 0.456, 0.406), dtype=self.torch.float32)[None, :, None, None]
-        img_std = self.torch.tensor((0.229, 0.224, 0.225), dtype=self.torch.float32)[None, :, None, None]
-
-        img_t = v.cuda(non_blocking=True)
-        img_t -= img_mean.cuda(non_blocking=True)
-        img_t /= img_std.cuda(non_blocking=True)
+        chunk_size = 16
+        for start in range(0, frame_count, chunk_size):
+            end = min(start + chunk_size, frame_count)
+            v = self.torch.from_numpy(vol_u8[start:end]).to("cuda").float().unsqueeze(1) / 255.0
+            v = v.repeat(1, 3, 1, 1)
+            v = self.torch.nn.functional.interpolate(
+                v,
+                size=(self.image_size, self.image_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+            img_t[start:end] = (v - img_mean) / img_std
 
         return PreparedVolume(vol_u8=vol_u8, img_t=img_t, height=height, width=width)
 
