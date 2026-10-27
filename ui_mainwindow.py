@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'mainwindow.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.11.0
+## Created by: Qt User Interface Compiler version 6.12.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
     QSpinBox, QSplitter, QStatusBar, QVBoxLayout,
     QWidget)
 
+from crosssectionview import CrossSectionView
 from imageview import ImageView
-from longitudinalview import LongitudinalView
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -45,14 +45,14 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.imageView.sizePolicy().hasHeightForWidth())
         self.imageView.setSizePolicy(sizePolicy)
         self.splitter.addWidget(self.imageView)
-        self.longitudinalView = LongitudinalView(self.splitter)
-        self.longitudinalView.setObjectName(u"longitudinalView")
+        self.crossSectionView = CrossSectionView(self.splitter)
+        self.crossSectionView.setObjectName(u"crossSectionView")
         sizePolicy1 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         sizePolicy1.setHorizontalStretch(0)
         sizePolicy1.setVerticalStretch(1)
-        sizePolicy1.setHeightForWidth(self.longitudinalView.sizePolicy().hasHeightForWidth())
-        self.longitudinalView.setSizePolicy(sizePolicy1)
-        self.splitter.addWidget(self.longitudinalView)
+        sizePolicy1.setHeightForWidth(self.crossSectionView.sizePolicy().hasHeightForWidth())
+        self.crossSectionView.setSizePolicy(sizePolicy1)
+        self.splitter.addWidget(self.crossSectionView)
 
         self.horizontalLayout.addWidget(self.splitter)
 
@@ -79,12 +79,7 @@ class Ui_MainWindow(object):
         self.checkpointsComboBox = QComboBox(self.groupBox)
         self.checkpointsComboBox.setObjectName(u"checkpointsComboBox")
 
-        self.gridLayout.addWidget(self.checkpointsComboBox, 1, 1, 1, 2)
-
-        self.engineComboBox = QComboBox(self.groupBox)
-        self.engineComboBox.setObjectName(u"engineComboBox")
-
-        self.gridLayout.addWidget(self.engineComboBox, 1, 0, 1, 1)
+        self.gridLayout.addWidget(self.checkpointsComboBox, 1, 0, 1, 3)
 
         self.saveKeyFramesButton = QPushButton(self.groupBox)
         self.saveKeyFramesButton.setObjectName(u"saveKeyFramesButton")
@@ -176,10 +171,10 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.playButton, 0, 0, 2, 1)
 
-        self.longitudinalComboBox = QComboBox(self.groupBox_4)
-        self.longitudinalComboBox.setObjectName(u"longitudinalComboBox")
+        self.crossSectionComboBox = QComboBox(self.groupBox_4)
+        self.crossSectionComboBox.setObjectName(u"crossSectionComboBox")
 
-        self.gridLayout_4.addWidget(self.longitudinalComboBox, 7, 0, 1, 1)
+        self.gridLayout_4.addWidget(self.crossSectionComboBox, 7, 0, 1, 1)
 
         self.angleSlider = QSlider(self.groupBox_4)
         self.angleSlider.setObjectName(u"angleSlider")
@@ -375,7 +370,7 @@ class Ui_MainWindow(object):
     # setupUi
 
     def retranslateUi(self, MainWindow):
-        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"DICOM SAM", None))
+        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"Echo", None))
         self.groupBox.setTitle(QCoreApplication.translate("MainWindow", u"File", None))
         self.openDicomButton.setText(QCoreApplication.translate("MainWindow", u"Open DICOM", None))
 #if QT_CONFIG(tooltip)

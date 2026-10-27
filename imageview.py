@@ -9,6 +9,8 @@ class ImageView(pg.ImageView):
     frameChanged = Signal(int)
     # action: "positive" | "negative" | "delete"
     pointClicked = Signal(int, int, str)
+    # Emitted while the user drags the custom cross-section line.
+    lineChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent, view=pg.PlotItem())
@@ -17,7 +19,8 @@ class ImageView(pg.ImageView):
         cm = pg.colormap.getFromMatplotlib("gray")
         self.setColorMap(cm)
         self.view.setAspectLocked(lock=True)
-        self.view.invertY(False)
+        # Image axes are (x=col, y=row) with row 0 at the top.
+        self.view.invertY(True)
         # self.ui.roiPlot.hideButtons()
         self.timeLine.sigPositionChanged.connect(self._on_timeline_changed)
 
@@ -53,6 +56,7 @@ class ImageView(pg.ImageView):
         self._contour_item.setZValue(20)
         self._spline_item.setZValue(21)
         self._spline_nodes_item.setZValue(22)
+        self._line_roi = None
         self.view.addItem(self._mask_item)
         self.view.addItem(self._contour_item)
         self.view.addItem(self._spline_item)
@@ -67,6 +71,11 @@ class ImageView(pg.ImageView):
     def _on_scene_click(self, event):
         if event.button() != Qt.LeftButton:
             return
+        # Clicks on the cross-section line or its handles are not prompt points.
+        if self._line_roi is not None and self._line_roi.isVisible():
+            for item in self.view.scene().items(event.scenePos()):
+                if item is self._line_roi or item.parentItem() is self._line_roi:
+                    return
         img_item = self.getImageItem()
         if img_item.image is None:
             return
@@ -189,7 +198,7 @@ class ImageView(pg.ImageView):
             self._mask_item.clear()
         else:
             # Keep label values as direct LUT indices (0..255) so obj_id maps to lut[obj_id].
-            mask_u8 = np.clip(mask_2d, 0, 255).astype(np.uint8, copy=False)
+            mask_u8 = np.clip(mask_2d, 0, 255).astype(np.uint8, copy=False).T
             max_label = int(mask_u8.max()) if mask_u8.size else 0
             self._set_mask_lut_for_labels(max_label)
             self._mask_item.setImage(mask_u8, autoLevels=False, levels=(0, 255))
@@ -214,9 +223,9 @@ class ImageView(pg.ImageView):
                 continue
             # Close contour loop and separate contours with NaN for connect='finite'.
             closed = np.vstack([pts, pts[0]])
-            # cv2 contours are returned as (col=x, row=y); ImageItem displays with swapped axes.
-            xs.extend(closed[:, 1].astype(float).tolist())
-            ys.extend(closed[:, 0].astype(float).tolist())
+            # cv2 contours are (x=col, y=row), matching the image axes.
+            xs.extend(closed[:, 0].astype(float).tolist())
+            ys.extend(closed[:, 1].astype(float).tolist())
             xs.append(np.nan)
             ys.append(np.nan)
 
@@ -244,8 +253,8 @@ class ImageView(pg.ImageView):
             if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
                 continue
             closed = np.vstack([pts, pts[0]])
-            xs.extend(closed[:, 1].astype(float).tolist())
-            ys.extend(closed[:, 0].astype(float).tolist())
+            xs.extend(closed[:, 0].astype(float).tolist())
+            ys.extend(closed[:, 1].astype(float).tolist())
             xs.append(np.nan)
             ys.append(np.nan)
 
@@ -272,8 +281,8 @@ class ImageView(pg.ImageView):
             pts = np.asarray(node_set)
             if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 1:
                 continue
-            xs.extend(pts[:, 1].astype(float).tolist())
-            ys.extend(pts[:, 0].astype(float).tolist())
+            xs.extend(pts[:, 0].astype(float).tolist())
+            ys.extend(pts[:, 1].astype(float).tolist())
 
         if not xs:
             self._spline_nodes_item.setData(pos=[])
@@ -314,6 +323,37 @@ class ImageView(pg.ImageView):
         self._spline_width = max(1, int(width))
         self._spline_item.setPen(pg.mkPen(self._spline_color, width=self._spline_width))
         self.view.update()
+
+    def set_line_endpoints(self, p0, p1):
+        """Create the editable cross-section line from p0 to p1, given as (x=col, y=row)."""
+        self.remove_line()
+        roi = pg.LineSegmentROI(
+            positions=[p0, p1],
+            pen=pg.mkPen((0, 255, 0, 255), width=3),
+        )
+        roi.setZValue(30)
+        roi.sigRegionChanged.connect(lambda *_args: self.lineChanged.emit())
+        self.view.addItem(roi)
+        self._line_roi = roi
+
+    def remove_line(self):
+        if self._line_roi is not None:
+            self.view.removeItem(self._line_roi)
+            self._line_roi = None
+
+    def set_line_visible(self, visible):
+        if self._line_roi is not None:
+            self._line_roi.setVisible(bool(visible))
+        self.view.update()
+
+    def line_endpoints(self):
+        """Return [(x, y), (x, y)] for the cross-section line, or None when there is no line."""
+        if self._line_roi is None:
+            return None
+        return [
+            (float(p.x()), float(p.y()))
+            for p in (self._line_roi.mapToParent(handle.pos()) for handle in self._line_roi.endpoints)
+        ]
 
     def set_frame_visible(self, visible):
         self.getImageItem().setVisible(bool(visible))

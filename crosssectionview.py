@@ -1,7 +1,7 @@
 import pyqtgraph as pg
 import numpy as np
 
-class LongitudinalView(pg.ImageView):
+class CrossSectionView(pg.ImageView):
 
     def __init__(self, parent=None):
         super().__init__(parent, view=pg.PlotItem())
@@ -9,7 +9,7 @@ class LongitudinalView(pg.ImageView):
         self.ui.roiBtn.hide()
         cm = pg.colormap.getFromMatplotlib('gray')
         self.setColorMap(cm)
-        # Longitudinal slices should stretch to fill available widget space.
+        # Cross-section slices should stretch to fill available widget space.
         self.view.setAspectLocked(lock=False)
         self.view.hideAxis('left')
         self.view.invertY(True)
@@ -51,7 +51,7 @@ class LongitudinalView(pg.ImageView):
         self._is_restoring_y = False
 
     def set_cross_section(self, image_2d):
-        """Render a 2D longitudinal slice and fit it to the full view area."""
+        """Render a 2D cross-section slice and fit it to the full view area."""
         if image_2d is None:
             self.clear()
             self._frame_line.setVisible(False)
@@ -66,7 +66,7 @@ class LongitudinalView(pg.ImageView):
         frame_count = int(max(1, image_2d.shape[1]))
         self._frame_count = frame_count
 
-        # Rotate view so longitudinal slices are displayed with the expected orientation.
+        # Rotate view so cross-section slices are displayed with the expected orientation.
         rotated = np.rot90(image_2d, k=-1)
         self.setImage(rotated, autoLevels=self._histogram_levels is None)
         if self._histogram_levels is not None:
@@ -99,7 +99,7 @@ class LongitudinalView(pg.ImageView):
         self.set_current_frame(self._current_frame)
 
     def set_contour_cross_sections(self, points):
-        """Display contour cross-section points in longitudinal coordinates."""
+        """Display contour cross-section points in cross-section coordinates."""
         if not points:
             self._cross_section_points.setData(pos=[])
             return

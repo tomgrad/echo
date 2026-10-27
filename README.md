@@ -1,27 +1,25 @@
 # Echo
 
-Goal: create an application for echocardiography analysis based on MedSAM2 models.
+Application for echocardiography analysis based on MedSAM2.
 
-Phase 1:
-- transition from Medic project (coronary analysis app) to Echo project
-- reuse code from Medic project if possible
-- remove all unnecessary code and files from Medic project
-- remove SAM2 support (keep only MedSAM2)
+## Setup
 
+- Python 3.14 (`.venv` links to the uv venv).
+- Install dependencies from `requirements.txt`. CUDA is required; use a CUDA build of PyTorch.
+- Install MedSAM2 (https://github.com/bowang-lab/MedSAM2). Its installed `sam2` package must provide `configs/sam2.1_hiera_t512.yaml`.
+- Put MedSAM2 checkpoints (`MedSAM2*.pt`) in `checkpoints/MedSAM2/`. A symlink to the checkpoint directory is fine.
 
-Some information:
-- data type: 2D, M-Mode, Doppler, 3D, Strain.
-- online viewer: https://www.dicomlibrary.com/meddream/?study=1.3.6.1.4.1.44316.6.102.1.20261023183452424.27478951279385216822
-- example data inside `data` folder (DICOM files, anonymized)
-- Python version: 3.14 (`.venv` is linking to uv venv)
+## Run
 
+```bash
+python main.py
+```
 
-old README.md below:
+## Data
 
-# Medic
+- Example data lives in `data/` (anonymized DICOM).
+- Planned data types: 2D, M-Mode, Doppler, 3D, Strain.
 
-- testowane na wersji Pythona 3.14.4
-- wymagane biblioteki w `requirements.txt` + MedSAM2 (https://github.com/bowang-lab/MedSAM2)
-- w tej chwili aplikacja spodziewa się checkpointów w katalogu `checkpoints` (`checkpoints/MedSAM2` i `checkpoints/SAM2`). Najlepiej zrobić linki symboliczne do katalogów z checkpointami. 
-- uwaga: by używać oryginalnych modeli SAM2 (opcjonalne), nie instalujemy SAM2, lecz dogrywamy configi do MedSAM2.
+## Roadmap
 
+- Phase 1: transition from the Medic (coronary) project. Done: SAM2 removed, MedSAM2 only.

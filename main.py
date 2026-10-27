@@ -1,8 +1,6 @@
 import sys
 import xml.etree.ElementTree as ET
-import importlib
 import traceback
-import re
 import pickle
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
@@ -13,14 +11,13 @@ import pydicom
 from PySide6.QtCore import QStringListModel, QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
-from medseg2 import MedSam2Segmenter, Sam2Segmenter
+from medseg2 import MedSam2Segmenter
 from mask_processing import fix_labeled_mask, find_external_contours, fit_spline_contours
 from ui_mainwindow import Ui_MainWindow
 
+LINE_AXES = {"free", "custom"}  # cross-section modes defined by a line in the image
 FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no limit.
-# For long studies, SAM2 at 1024 can exceed VRAM because preprocessing moves all
-# frames to CUDA at once. Keeping SAM2 at 512 is a practical high-frame workaround.
-SAM2_MAX_IMAGE_SIZE = 512
+MEDSAM2_MODEL_CFG = "configs/sam2.1_hiera_t512.yaml"
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -30,13 +27,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.setupUi(self)
         self.checkpoints_root_dir = Path(__file__).resolve().parent / "checkpoints"
         self.medsam2_checkpoints_dir = self.checkpoints_root_dir / "MedSAM2"
-        self.sam2_checkpoints_dir = self.checkpoints_root_dir / "SAM2"
-        self.engine_names = {
-            "medsam2": "MedSAM2",
-            "sam2": "SAM2",
-        }
 
         self.pixel_array = None
+        # Grayscale (frames, rows, cols) volume used by the cross-section view.
+        self.cross_section_volume = None
         self.dicom_dataset = None
         self.dicom_file_path = None
         self.key_frames = []
@@ -67,7 +61,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.keyFramesListView.clicked.connect(self.show_selected_key_frame)
         self.keyFramesListView.activated.connect(self.show_selected_key_frame)
         self.imageView.frameChanged.connect(self.refresh_point_overlay)
-        self.imageView.frameChanged.connect(self._update_longitudinal_frame_marker)
+        self.imageView.frameChanged.connect(self._update_cross_section_frame_marker)
         self.imageView.pointClicked.connect(self.on_point_clicked)
         self.saveKeyFramesButton.clicked.connect(self.save_key_frames)
         self.loadKeyFramesButton.clicked.connect(self.load_key_frames)
@@ -92,12 +86,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
         self.imageView.getHistogramWidget().item.sigLevelsChanged.connect(
-            self._sync_longitudinal_histogram
+            self._sync_cross_section_histogram
         )
-        self._setup_longitudinal_selector()
-        self.longitudinalComboBox.currentIndexChanged.connect(self._on_longitudinal_mode_changed)
-        self.angleSlider.valueChanged.connect(self._on_longitudinal_angle_changed)
-        self._setup_engine_selector()
+        self._setup_cross_section_selector()
+        self.crossSectionComboBox.currentIndexChanged.connect(self._on_cross_section_mode_changed)
+        self.angleSlider.valueChanged.connect(self._on_cross_section_angle_changed)
+        self.imageView.lineChanged.connect(self._on_custom_line_changed)
         self.checkpointsComboBox.currentIndexChanged.connect(self._on_checkpoint_changed)
         self._populate_checkpoints_combo()
         self._update_play_timer_interval(self.fpsSpinBox.value())
@@ -114,28 +108,45 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _on_object_id_changed(self, _value):
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
-        self.update_longitudinal_view()
+        self.update_cross_section_view()
         self.show_status(f"Active object set to {self._active_obj_id()}", 3000)
 
-    def _setup_longitudinal_selector(self):
-        self.longitudinalComboBox.clear()
-        self.longitudinalComboBox.addItem("y = height / 2", "x")
-        self.longitudinalComboBox.addItem("x = width / 2", "y")
-        self.longitudinalComboBox.addItem("free (center + angle)", "free")
+    def _setup_cross_section_selector(self):
+        self.crossSectionComboBox.clear()
+        self.crossSectionComboBox.addItem("y = height / 2", "y")
+        self.crossSectionComboBox.addItem("x = width / 2", "x")
+        self.crossSectionComboBox.addItem("free (center + angle)", "free")
+        self.crossSectionComboBox.addItem("custom line", "custom")
         self.angleSlider.setEnabled(False)
 
-    def _selected_longitudinal_axis(self):
-        axis = self.longitudinalComboBox.currentData()
-        return axis if axis in {"x", "y", "free"} else "x"
+    def _selected_cross_section_axis(self):
+        axis = self.crossSectionComboBox.currentData()
+        return axis if axis in {"x", "y", "free", "custom"} else "x"
 
-    def _on_longitudinal_mode_changed(self, _index=None):
-        is_free = self._selected_longitudinal_axis() == "free"
-        self.angleSlider.setEnabled(is_free)
-        self.update_longitudinal_view()
+    def _on_cross_section_mode_changed(self, _index=None):
+        axis = self._selected_cross_section_axis()
+        self.angleSlider.setEnabled(axis == "free")
+        self.imageView.set_line_visible(axis == "custom")
+        if axis == "custom" and self.imageView.line_endpoints() is None:
+            self._reset_custom_line()
+        self.update_cross_section_view()
 
-    def _on_longitudinal_angle_changed(self, _value):
-        if self._selected_longitudinal_axis() == "free":
-            self.update_longitudinal_view()
+    def _on_cross_section_angle_changed(self, _value):
+        if self._selected_cross_section_axis() == "free":
+            self.update_cross_section_view()
+
+    def _on_custom_line_changed(self):
+        if self._selected_cross_section_axis() == "custom":
+            self.update_cross_section_view()
+
+    def _reset_custom_line(self):
+        """Place the custom line across the middle of the frame, return its endpoints."""
+        _, height, width = self.cross_section_volume.shape
+        p0 = (0.25 * (width - 1), 0.5 * (height - 1))
+        p1 = (0.75 * (width - 1), 0.5 * (height - 1))
+        self.imageView.set_line_endpoints(p0, p1)
+        self.imageView.set_line_visible(self._selected_cross_section_axis() == "custom")
+        return self.imageView.line_endpoints()
 
     @staticmethod
     def _contour_intersections_with_slice(contour, axis, slice_index):
@@ -286,7 +297,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         bottom = v01 * (1.0 - wx) + v11 * wx
         return (top * (1.0 - wy) + bottom * wy).T
 
-    def _longitudinal_contour_points(
+    def _cross_section_contour_points(
         self,
         axis,
         slice_index,
@@ -307,12 +318,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         for frame_idx in range(frame_count):
             contours = self.segmentation_contours.get(frame_idx, [])
             for contour in contours:
-                if axis == "free":
+                if axis in LINE_AXES:
                     values = self._contour_intersections_with_line_segment(contour, line_start, line_end)
                 else:
                     values = self._contour_intersections_with_slice(contour, axis, slice_index)
                 for value in values:
-                    if axis == "free" and line_length is not None and line_length > 1e-6:
+                    if axis in LINE_AXES and line_length is not None and line_length > 1e-6:
                         full_size = max(2, int(free_full_size if free_full_size is not None else image_size))
                         # Project arc-length along free line into full sampled row coordinates.
                         value = float(value) * float(full_size - 1) / float(line_length)
@@ -322,20 +333,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     points.append((float(frame_idx), y))
         return points
 
-    def _build_axis_longitudinal_slice(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
+    def _build_axis_cross_section_slice(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
         _, height, width = base_volume.shape
         if axis == "y":
             slice_index = height // 2
-            longitudinal = base_volume[:, slice_index, :].T
+            cross_section = base_volume[:, slice_index, :].T
             image_size = width
         else:
             slice_index = width // 2
-            longitudinal = base_volume[:, :, slice_index].T
+            cross_section = base_volume[:, :, slice_index].T
             image_size = height
 
         return {
             "slice_index": slice_index,
-            "longitudinal": longitudinal,
+            "cross_section": cross_section,
             "image_size": image_size,
             "line_start": None,
             "line_end": None,
@@ -344,29 +355,29 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             "free_clip_offset": 0.0,
         }
 
-    def _build_free_longitudinal_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
+    def _build_free_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
         _, height, width = base_volume.shape
         angle_degrees = float(self.angleSlider.value())
         line_start, line_end = self._line_segment_through_center(height, width, angle_degrees)
         line_length = float(np.linalg.norm(line_end - line_start))
         full_samples = max(2, int(np.ceil(line_length)) + 1)
-        full_longitudinal = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
+        full_cross_section = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
 
         target_size = max(2, int(width))
         if full_samples > target_size:
             start = int((full_samples - target_size) // 2)
             end = start + target_size
-            longitudinal = full_longitudinal[start:end, :]
+            cross_section = full_cross_section[start:end, :]
             image_size = target_size
             free_clip_offset = float(start)
         else:
-            longitudinal = full_longitudinal
+            cross_section = full_cross_section
             image_size = full_samples
             free_clip_offset = 0.0
 
         return {
             "slice_index": None,
-            "longitudinal": longitudinal,
+            "cross_section": cross_section,
             "image_size": image_size,
             "line_start": line_start,
             "line_end": line_end,
@@ -375,26 +386,49 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             "free_clip_offset": free_clip_offset,
         }
 
-    def _build_longitudinal_slice_context(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
-        if axis in {"x", "y"}:
-            return self._build_axis_longitudinal_slice(base_volume, axis)
-        return self._build_free_longitudinal_slice(base_volume)
+    def _build_custom_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
+        endpoints = self.imageView.line_endpoints() or self._reset_custom_line()
+        line_start, line_end = endpoints
+        line_start = np.asarray(line_start, dtype=float)
+        line_end = np.asarray(line_end, dtype=float)
+        line_length = float(np.linalg.norm(line_end - line_start))
+        full_samples = max(2, int(np.ceil(line_length)) + 1)
+        # Keep the whole line: no cropping to the frame width.
+        cross_section = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
 
-    def update_longitudinal_view(self):
-        base_volume = self.pixel_array
+        return {
+            "slice_index": None,
+            "cross_section": cross_section,
+            "image_size": full_samples,
+            "line_start": line_start,
+            "line_end": line_end,
+            "line_length": line_length,
+            "free_full_size": full_samples,
+            "free_clip_offset": 0.0,
+        }
+
+    def _build_cross_section_slice_context(self, base_volume: np.ndarray, axis: str) -> dict[str, Any]:
+        if axis in {"x", "y"}:
+            return self._build_axis_cross_section_slice(base_volume, axis)
+        if axis == "custom":
+            return self._build_custom_cross_section_slice(base_volume)
+        return self._build_free_cross_section_slice(base_volume)
+
+    def update_cross_section_view(self):
+        base_volume = self.cross_section_volume
         if base_volume is None or base_volume.ndim != 3:
-            self.longitudinalView.clear()
-            self.longitudinalView.set_contour_cross_sections([])
+            self.crossSectionView.clear()
+            self.crossSectionView.set_contour_cross_sections([])
             return
 
-        axis = self._selected_longitudinal_axis()
-        ctx = self._build_longitudinal_slice_context(base_volume, axis)
+        axis = self._selected_cross_section_axis()
+        ctx = self._build_cross_section_slice_context(base_volume, axis)
 
-        self.longitudinalView.set_cross_section(ctx["longitudinal"])
+        self.crossSectionView.set_cross_section(ctx["cross_section"])
         if self.hideContoursCheckBox.isChecked():
             contour_points = []
         else:
-            contour_points = self._longitudinal_contour_points(
+            contour_points = self._cross_section_contour_points(
                 axis,
                 ctx["slice_index"],
                 ctx["image_size"],
@@ -404,17 +438,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 free_full_size=ctx["free_full_size"],
                 free_clip_offset=ctx["free_clip_offset"],
             )
-        self.longitudinalView.set_contour_cross_sections(contour_points)
-        self._update_longitudinal_frame_marker(self.imageView.currentIndex)
+        self.crossSectionView.set_contour_cross_sections(contour_points)
+        self._update_cross_section_frame_marker(self.imageView.currentIndex)
 
-    def _update_longitudinal_frame_marker(self, frame_idx=None):
+    def _update_cross_section_frame_marker(self, frame_idx=None):
         if frame_idx is None:
             frame_idx = self.imageView.currentIndex
-        self.longitudinalView.set_current_frame(int(frame_idx))
+        self.crossSectionView.set_current_frame(int(frame_idx))
 
-    def _sync_longitudinal_histogram(self, *_args):
+    def _sync_cross_section_histogram(self, *_args):
         levels = self.imageView.getLevels()
-        self.longitudinalView.set_histogram_levels(levels)
+        self.crossSectionView.set_histogram_levels(levels)
 
     def _start_segmentation_progress(self, message):
         self.seg_progress_bar.setRange(0, 100)
@@ -440,166 +474,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         QApplication.processEvents()
         self.seg_progress_bar.setVisible(False)
 
-    def _setup_engine_selector(self):
-        self.engineComboBox.addItem(self.engine_names["medsam2"], "medsam2")
-        self.engineComboBox.addItem(self.engine_names["sam2"], "sam2")
-        self.engineComboBox.currentIndexChanged.connect(self._on_engine_changed)
-
-    def _selected_engine_key(self):
-        key = self.engineComboBox.currentData()
-        return key if key in self.engine_names else "medsam2"
-
-    def _current_engine_name(self):
-        return self.engine_names[self._selected_engine_key()]
-
-    def _checkpoint_candidates_for_engine(self, engine_key):
-        if engine_key == "sam2":
-            # SAM2 folder may include shell scripts; only keep checkpoint files.
-            matches = list(self.sam2_checkpoints_dir.glob("sam2*.pt"))
-            matches += list(self.sam2_checkpoints_dir.glob("SAM2*.pt"))
-            return sorted(set(matches), key=lambda path: path.name.lower())
-        return sorted(self.medsam2_checkpoints_dir.glob("MedSAM2*.pt"), key=lambda path: path.name.lower())
-
-    @staticmethod
-    def _default_checkpoint_name_for_engine(engine_key):
-        if engine_key == "sam2":
-            return "sam2.1_hiera_tiny.pt"
-        return "MedSAM2_latest.pt"
-
-    def _is_checkpoint_compatible(self, engine_key, checkpoint_path):
-        checkpoint_name = checkpoint_path.name
-        if engine_key == "sam2":
-            return checkpoint_path.parent == self.sam2_checkpoints_dir and checkpoint_name.lower().startswith("sam2")
-        return checkpoint_path.parent == self.medsam2_checkpoints_dir and checkpoint_name.startswith("MedSAM2")
-
-    def _checkpoint_hint_for_engine(self, engine_key):
-        if engine_key == "sam2":
-            return "sam2*.pt files in checkpoints/SAM2/."
-        return "MedSAM2*.pt files in checkpoints/MedSAM2/."
-
-    @staticmethod
-    def _sam2_package_dir():
-        try:
-            sam2_mod = importlib.import_module("sam2")
-            return Path(sam2_mod.__file__).resolve().parent
-        except Exception:
-            return None
-
-    @staticmethod
-    def _hiera_variant_from_checkpoint(checkpoint_path):
-        name = checkpoint_path.name.lower()
-        # MedSAM2-specific checkpoint names.
-        if "efficienttam_s" in name:
-            return "s"
-        if "efficienttam_ti" in name:
-            return "t"
-
-        # Common SAM2 family naming patterns.
-        if "hiera_tiny" in name or name.endswith("_ti.pt"):
-            return "t"
-        if "hiera_large" in name:
-            return "l"
-        if "hiera_base_plus" in name:
-            return "b+"
-        if "hiera_small" in name:
-            return "s"
-        return "t"
-
-    @staticmethod
-    def _sam2_config_candidate_for_variant(variant):
-        # Official SAM2 configs live under configs/sam2.1/.
-        variant_to_suffix = {
-            "t": "t",
-            "s": "s",
-            "b+": "b+",
-            "l": "l",
-        }
-        suffix = variant_to_suffix.get(variant, "t")
-        return f"configs/sam2.1/sam2.1_hiera_{suffix}.yaml"
-
-    @classmethod
-    def _sam2_config_exists(cls, config_rel_path):
-        package_dir = cls._sam2_package_dir()
-        if package_dir is None:
-            return False
-        return (package_dir / config_rel_path).exists()
-
-    @classmethod
-    def _available_sam2_configs(cls):
-        package_dir = cls._sam2_package_dir()
-        if package_dir is None:
-            return []
-        return sorted(str(path.relative_to(package_dir)) for path in package_dir.rglob("*.yaml"))
-
-    @classmethod
-    def _model_cfg_for_selection(cls, engine_key, checkpoint_path):
-        variant = cls._hiera_variant_from_checkpoint(checkpoint_path)
-
-        if engine_key == "medsam2":
-            candidate = "configs/sam2.1_hiera_t512.yaml"
-            if cls._sam2_config_exists(candidate):
-                return candidate
-
-            package_dir = cls._sam2_package_dir()
-            available = cls._available_sam2_configs()
-            raise RuntimeError(
-                "Selected MedSAM2 checkpoint requires configs/sam2.1_hiera_t512.yaml in the "
-                "installed sam2 package, but it was not found. "
-                f"Imported sam2 package path: {package_dir}. "
-                f"Available configs in installed package: {available}"
-            )
-
-        # For SAM2 engine: prefer the standard sam2.1 layout.
-        candidate = cls._sam2_config_candidate_for_variant(variant)
-
-        if cls._sam2_config_exists(candidate):
-            return candidate
-
-        package_dir = cls._sam2_package_dir()
-        available = cls._available_sam2_configs()
-        raise RuntimeError(
-            "Selected SAM2 checkpoint requires SAM2 configs (configs/sam2.1/*.yaml) "
-            "inside the installed sam2 package, but they were not found. "
-            "If you are using the MedSAM2 fork only, copy the SAM2 config files into that package. "
-            f"Imported sam2 package path: {package_dir}. "
-            f"Available configs in installed package: {available}"
-        )
-
-    @classmethod
-    def _image_size_for_model_cfg(cls, model_cfg):
-        # Prefer explicit image_size declared in YAML when available.
-        package_dir = cls._sam2_package_dir()
-        if package_dir is not None:
-            cfg_path = package_dir / model_cfg
-            if cfg_path.exists():
-                try:
-                    text = cfg_path.read_text(encoding="utf-8", errors="ignore")
-                    match = re.search(r"^\s*image_size\s*:\s*(\d+)\s*$", text, flags=re.MULTILINE)
-                    if match:
-                        return int(match.group(1))
-                except Exception:
-                    pass
-
-        # Fallback heuristic from file naming.
-        if "512" in model_cfg:
-            return 512
-        return 1024
-
-    def _create_segmenter_for_selection(self, engine_key, checkpoint_path):
-        model_cfg = self._model_cfg_for_selection(engine_key, checkpoint_path)
-        if engine_key == "sam2":
-            image_size = min(self._image_size_for_model_cfg(model_cfg), SAM2_MAX_IMAGE_SIZE)
-            return Sam2Segmenter(
-                checkpoint_path=str(checkpoint_path),
-                model_cfg=model_cfg,
-                image_size=image_size,
-            )
+    def _create_segmenter_for_selection(self, checkpoint_path):
         # Keep MedSAM2 preprocessing at 512 to preserve historical behavior.
-        image_size = 512
         return MedSam2Segmenter(
             checkpoint_path=str(checkpoint_path),
-            model_cfg=model_cfg,
-            image_size=image_size,
+            model_cfg=MEDSAM2_MODEL_CFG,
+            image_size=512,
         )
 
     def _release_segmenter(self):
@@ -607,16 +487,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
         self.segmenter = None
 
-    def _on_engine_changed(self, _index=None):
-        self._release_segmenter()
-        self._populate_checkpoints_combo()
-        self.show_status(f"Selected engine: {self._current_engine_name()}", 4000)
-
     def _populate_checkpoints_combo(self):
-        engine_key = self._selected_engine_key()
-        checkpoint_paths = self._checkpoint_candidates_for_engine(engine_key)
-        default_name = self._default_checkpoint_name_for_engine(engine_key)
-        checkpoints_dir = self.sam2_checkpoints_dir if engine_key == "sam2" else self.medsam2_checkpoints_dir
+        checkpoint_paths = sorted(
+            self.medsam2_checkpoints_dir.glob("MedSAM2*.pt"), key=lambda path: path.name.lower()
+        )
 
         self.checkpointsComboBox.blockSignals(True)
         self.checkpointsComboBox.clear()
@@ -625,7 +499,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.checkpointsComboBox.setEnabled(False)
             self.checkpointsComboBox.blockSignals(False)
             self.show_status(
-                f"No {self._current_engine_name()} checkpoints found in {checkpoints_dir.as_posix()}/.",
+                f"No MedSAM2 checkpoints found in {self.medsam2_checkpoints_dir.as_posix()}/.",
                 6000,
             )
             return
@@ -634,7 +508,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.checkpointsComboBox.addItem(checkpoint_path.name, str(checkpoint_path))
 
         default_index = next(
-            (index for index, path in enumerate(checkpoint_paths) if path.name == default_name),
+            (index for index, path in enumerate(checkpoint_paths) if path.name == "MedSAM2_latest.pt"),
             0,
         )
         self.checkpointsComboBox.setCurrentIndex(default_index)
@@ -652,10 +526,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         checkpoint_path = self._selected_checkpoint_path()
         self._release_segmenter()
         if emit_status and checkpoint_path is not None:
-            self.show_status(
-                f"Selected {self._current_engine_name()} checkpoint: {checkpoint_path.name}",
-                4000,
-            )
+            self.show_status(f"Selected MedSAM2 checkpoint: {checkpoint_path.name}", 4000)
 
     def closeEvent(self, event):
         self.stop_playback()
@@ -785,7 +656,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.imageView.set_points_visible(show_points)
         self.imageView.set_mask_visible(show_masks)
         self.imageView.set_contours_visible(show_contours)
-        self.longitudinalView.set_contours_visible(show_contours)
+        self.crossSectionView.set_contours_visible(show_contours)
         self.imageView.set_splines_visible(show_splines)
         self.imageView.set_spline_nodes_visible(show_nodes)
         self.imageView.set_frame_visible(show_frames)
@@ -989,24 +860,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.show_status(f"Saved contours to {output_path}", 6000)
 
     def _ensure_segmenter(self):
-        engine_key = self._selected_engine_key()
         checkpoint_path = self._selected_checkpoint_path()
         if checkpoint_path is None:
-            raise RuntimeError(
-                f"No {self._current_engine_name()} checkpoint selected. Add {self._checkpoint_hint_for_engine(engine_key)}"
-            )
+            raise RuntimeError("No MedSAM2 checkpoint selected. Add MedSAM2*.pt files in checkpoints/MedSAM2/.")
 
         if not checkpoint_path.exists():
             raise RuntimeError(f"Selected checkpoint does not exist: {checkpoint_path}")
 
-        if not self._is_checkpoint_compatible(engine_key, checkpoint_path):
-            raise RuntimeError(
-                f"Selected checkpoint is not compatible with {self._current_engine_name()}. "
-                f"Use {self._checkpoint_hint_for_engine(engine_key)}"
-            )
-
         if self.segmenter is None:
-            self.segmenter = self._create_segmenter_for_selection(engine_key, checkpoint_path)
+            self.segmenter = self._create_segmenter_for_selection(checkpoint_path)
 
     def _ensure_ready_for_segmentation(self):
         if self.pixel_array is None or self.dicom_dataset is None:
@@ -1022,7 +884,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
-        self.update_longitudinal_view()
+        self.update_cross_section_view()
 
     def _points_by_object_for_frame(self, frame_idx):
         return {
@@ -1059,7 +921,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
-        self.update_longitudinal_view()
+        self.update_cross_section_view()
         self.refresh_point_overlay()
         return True
 
@@ -1282,7 +1144,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
-        self.update_longitudinal_view()
+        self.update_cross_section_view()
         self.refresh_point_overlay()
         self._finish_segmentation_progress(f"Mask fixing complete (smooth level: {iterations}).")
 
@@ -1306,7 +1168,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         color = (255, 255, 0, 255)
         self.imageView.set_contour_color(color)
         self.refresh_point_overlay()
-        self.update_longitudinal_view()
+        self.update_cross_section_view()
         if use_approx:
             self.show_status(f"External contours extracted (approxPolyDP, epsilon={epsilon:g}).", 5000)
         else:
@@ -1356,12 +1218,23 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 if pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
                     pixel_array = pixel_array[:FRAMES_LIMIT]
                 self.pixel_array = pixel_array
+                self.imageView.remove_line()
+                if dicom.get("SamplesPerPixel", 1) > 1:
+                    # Cross-section slices need one channel; use the mean of RGB.
+                    self.cross_section_volume = pixel_array.mean(axis=-1, dtype=np.float32)
+                else:
+                    self.cross_section_volume = pixel_array
                 self.segmentation_mask = None
                 self.segmentation_contours = None
                 self.segmentation_splines = None
                 self.segmentation_spline_nodes = None
                 self.stop_playback()
-                self.imageView.setImage(self.pixel_array)
+                # ImageView takes (x=col, y=row) axes. Swap rows/cols, keeping an RGB channel axis last.
+                if dicom.get("SamplesPerPixel", 1) > 1:
+                    display_array = np.swapaxes(self.pixel_array, -3, -2)
+                else:
+                    display_array = np.swapaxes(self.pixel_array, -2, -1)
+                self.imageView.setImage(display_array)
                 self.imageView.set_mask(None)
                 self.imageView.set_contours([])
                 self.imageView.set_splines([])
@@ -1370,8 +1243,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.key_frame_points.clear()
                 self.refresh_key_frames_list()
                 self.refresh_point_overlay()
-                self.update_longitudinal_view()
-                self._sync_longitudinal_histogram()
+                self.update_cross_section_view()
+                self._sync_cross_section_histogram()
                 self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
 
 

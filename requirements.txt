@@ -4,6 +4,7 @@ pydicom
 pyqtgraph
 PySide6
 scipy
-scikit-image
-matplotlib
-ipympl
+torch
+
+# MedSAM2 provides the sam2 package; install it separately:
+# https://github.com/bowang-lab/MedSAM2

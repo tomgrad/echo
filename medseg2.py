@@ -45,8 +45,8 @@ class PreparedVolume:
 ProgressCallback = Callable[[int, int, str], None]
 
 
-class MedSeg2Segmenter:
-    """Common SAM2-family wrapper for keyframe-driven DICOM segmentation."""
+class MedSam2Segmenter:
+    """MedSAM2 wrapper for keyframe-driven DICOM segmentation."""
 
     def __init__(
         self,
@@ -63,21 +63,6 @@ class MedSeg2Segmenter:
         self._predictor = self._create_predictor()
 
     def _create_predictor(self):
-        raise NotImplementedError("Subclasses must implement _create_predictor().")
-
-
-class Sam2Segmenter(MedSeg2Segmenter):
-    """SAM2 adapter using NPZ predictor for DICOM tensor workflows."""
-
-    def __init__(
-        self,
-        checkpoint_path: str = "checkpoints/SAM2/sam2.1_hiera_tiny.pt",
-        model_cfg: str = "configs/sam2.1_hiera_t.yaml",
-        image_size: int = 512,
-    ) -> None:
-        super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
-
-    def _create_predictor(self):
         hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
         return self._build_sam2_video_predictor_npz(
             self.model_cfg,
@@ -86,21 +71,6 @@ class Sam2Segmenter(MedSeg2Segmenter):
             hydra_overrides_extra=hydra_overrides_extra,
         )
 
-    @staticmethod
-    def _read_window_from_dicom(ds) -> Tuple[Optional[float], Optional[float]]:
-        center = getattr(ds, "WindowCenter", None)
-        width = getattr(ds, "WindowWidth", None)
-        if isinstance(center, (list, tuple)):
-            center = center[0]
-        if isinstance(width, (list, tuple)):
-            width = width[0]
-        try:
-            center = float(center) if center is not None else None
-            width = float(width) if width is not None else None
-        except Exception:
-            center, width = None, None
-        return center, width
-
     def _prepare_volume(
         self,
         pixel_array: np.ndarray,
@@ -108,6 +78,9 @@ class Sam2Segmenter(MedSeg2Segmenter):
         percentile_clip: Tuple[float, float] = (0.5, 99.5),
     ) -> PreparedVolume:
         arr = pixel_array.astype(np.float32)
+        if arr.ndim == 4 and arr.shape[-1] == 3:
+            # RGB frames: segment on the channel mean (grayscale).
+            arr = arr.mean(axis=-1)
         if arr.ndim == 2:
             vol = arr[None, ...]
         elif arr.ndim == 3:
@@ -149,9 +122,8 @@ class Sam2Segmenter(MedSeg2Segmenter):
         if not points:
             raise ValueError("No prompt points available for this keyframe.")
 
-        # UI/image-view coordinates are stored in display order (row, col).
-        # SAM expects prompt coordinates in (x, y) = (col, row).
-        coords = np.array([[p[1], p[0]] for p in points], dtype=np.float32)
+        # Image-view points are stored as (x, y) = (col, row), the order SAM expects.
+        coords = np.array([[p[0], p[1]] for p in points], dtype=np.float32)
         labels = np.array([1 if p[2] else 0 for p in points], dtype=np.int32)
         return coords, labels
 
@@ -483,24 +455,3 @@ class Sam2Segmenter(MedSeg2Segmenter):
                 self._predictor.reset_state(inference_state)
 
         return segs_3d
-
-
-class MedSam2Segmenter(Sam2Segmenter):
-    """MedSAM2 adapter with MedSAM2-specific defaults and NPZ predictor builder."""
-
-    def __init__(
-        self,
-        checkpoint_path: str = "checkpoints/MedSAM2/MedSAM2_latest.pt",
-        model_cfg: str = "configs/sam2.1_hiera_t512.yaml",
-        image_size: int = 512,
-    ) -> None:
-        super().__init__(checkpoint_path=checkpoint_path, model_cfg=model_cfg, image_size=image_size)
-
-    def _create_predictor(self):
-        hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
-        return self._build_sam2_video_predictor_npz(
-            self.model_cfg,
-            self.checkpoint_path,
-            device="cuda",
-            hydra_overrides_extra=hydra_overrides_extra,
-        )
