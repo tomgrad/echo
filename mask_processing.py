@@ -138,29 +138,23 @@ def interpolate_contour_catmull_rom(
     m = control.shape[0]
     segments = m
 
-    def _catmull_rom(p0, p1, p2, p3, t):
-        t2 = t * t
-        t3 = t2 * t
-        return 0.5 * (
-            (2.0 * p1)
-            + (-p0 + p2) * t
-            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
-        )
-
     t_global = np.linspace(0, segments, num_samples, endpoint=False)
-    seg_ids = np.floor(t_global).astype(int)
-    seg_ids = np.clip(seg_ids, 0, segments - 1)
-    t_local = t_global - seg_ids
+    seg_ids = np.clip(np.floor(t_global).astype(int), 0, segments - 1)
+    t = (t_global - seg_ids)[:, None]
 
-    out = np.empty((num_samples, 2), dtype=np.float64)
-    for i, (seg, t) in enumerate(zip(seg_ids, t_local)):
-        i1 = seg
-        i2 = (seg + 1) % m
-        i0 = (i1 - 1) % m
-        i3 = (i2 + 1) % m
-
-        out[i] = _catmull_rom(control[i0], control[i1], control[i2], control[i3], t)
+    i1 = seg_ids
+    i2 = (seg_ids + 1) % m
+    i0 = (i1 - 1) % m
+    i3 = (i2 + 1) % m
+    p0, p1, p2, p3 = control[i0], control[i1], control[i2], control[i3]
+    t2 = t * t
+    t3 = t2 * t
+    out = 0.5 * (
+        (2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
 
     if return_control_points:
         return out, control

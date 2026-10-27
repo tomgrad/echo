@@ -8,7 +8,6 @@ OUTLINE_HANDLE_RADIUS_PX = 10
 
 
 class ImageView(pg.ImageView):
-    dragCoordinates = Signal(int, int)
     frameChanged = Signal(int)
     # action: "positive" | "negative" | "delete"
     pointClicked = Signal(int, int, str)
@@ -179,17 +178,6 @@ class ImageView(pg.ImageView):
             lut[label] = [rgba[0], rgba[1], rgba[2], 160]
         self._mask_lut = lut
         self._mask_item.setLookupTable(self._mask_lut)
-
-    def set_points(self, positive_points, negative_points):
-        """Update prompt-point overlays.  Each arg is a list of (x, y) tuples."""
-        self.set_points_by_object(
-            {
-                1: {
-                    "positive": positive_points or [],
-                    "negative": negative_points or [],
-                }
-            }
-        )
 
     def set_points_by_object(self, points_by_object):
         """Update prompt points for all objects.
