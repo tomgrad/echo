@@ -1,7 +1,7 @@
 import sys
 import xml.etree.ElementTree as ET
 import traceback
-import pickle
+import json
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBo
 from medseg2 import MedSam2Segmenter
 from mask_processing import (
     build_custom_mask,
+    contours_to_jsonable,
     fix_labeled_mask,
     find_external_contours,
     fit_spline_contours,
@@ -88,6 +89,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.keyFramesListView.setModel(self.key_frames_model)
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._advance_frame)
+        # Custom line drags fire on every mouse move; recompute the cross-section once they settle.
+        self._cross_section_timer = QTimer(self)
+        self._cross_section_timer.setSingleShot(True)
+        self._cross_section_timer.setInterval(40)
+        self._cross_section_timer.timeout.connect(self.update_cross_section_view)
         self.is_playing = False
         self.seg_progress_bar = QProgressBar(self)
         self.seg_progress_bar.setMinimum(0)
@@ -177,7 +183,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _on_custom_line_changed(self):
         if self._selected_cross_section_axis() == "custom":
-            self.update_cross_section_view()
+            self._cross_section_timer.start()
 
     def _reset_custom_line(self):
         """Place the custom line vertically across the middle of the frame, return its endpoints."""
@@ -419,10 +425,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         levels = self.imageView.getLevels()
         self.crossSectionView.set_histogram_levels(levels)
 
-    def _start_segmentation_progress(self, message):
-        self.seg_progress_bar.setRange(0, 100)
-        self.seg_progress_bar.setValue(0)
-        self.seg_progress_bar.setFormat("0%")
+    def _start_segmentation_progress(self, message, indeterminate=False):
+        if indeterminate:
+            # No progress callbacks for this task: show a busy bar instead of a stuck 0%.
+            self.seg_progress_bar.setRange(0, 0)
+        else:
+            self.seg_progress_bar.setRange(0, 100)
+            self.seg_progress_bar.setValue(0)
+            self.seg_progress_bar.setFormat("0%")
         self.seg_progress_bar.setVisible(True)
         self.statusbar.showMessage(message, 0)
 
@@ -576,7 +586,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             changed = True
 
         if changed:
-            self._invalidate_segmentation()
+            self._invalidate_object(obj_id)
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
 
@@ -605,7 +615,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             )
             changed = True
         if changed:
-            self._invalidate_segmentation()
+            self._invalidate_object(obj_id)
         self.refresh_point_overlay()
 
     def _insert_outline_vertex(self, frame, x, y):
@@ -646,8 +656,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _on_outline_handle_released(self):
         if self._outline_drag is None:
             return
+        obj_id = self._outline_drag[0]
         self._outline_drag = None
-        self._invalidate_segmentation()
+        self._invalidate_object(obj_id)
         self.refresh_point_overlay()
         self.show_status("Outline vertex moved")
 
@@ -667,7 +678,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.key_frame_outlines.get(obj_id, {}).pop(frame, None) is None:
             self.show_status(f"No outline for object {obj_id} on this frame.")
             return
-        self._invalidate_segmentation()
+        self._invalidate_object(obj_id)
         self.refresh_point_overlay()
         self.show_status(f"Cleared outline for object {obj_id} on frame {frame}")
 
@@ -812,11 +823,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.key_frames_model.setStringList(labels)
 
     def _frame_from_list_index(self, model_index):
-        text = str(model_index.data())
-        try:
-            return int(text.split(" ", 1)[0])
-        except (ValueError, IndexError):
-            return None
+        # refresh_key_frames_list adds one label per key frame, in key_frames order.
+        row = model_index.row()
+        if 0 <= row < len(self.key_frames):
+            return self.key_frames[row]
+        return None
 
     def save_key_frames(self):
         if not self.key_frames:
@@ -942,23 +953,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         output_dir = Path(__file__).resolve().parent / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{dicom_stem}_contours.pkl"
+        output_path = output_dir / f"{dicom_stem}_contours.json"
 
-        with output_path.open("wb") as handle:
-            pickle.dump(self.segmentation_contours, handle)
+        with output_path.open("w", encoding="utf-8") as handle:
+            json.dump(contours_to_jsonable(self.segmentation_contours), handle)
 
         self.show_status(f"Saved contours to {output_path}", 6000)
 
-    def _ensure_segmenter(self):
+    def _checked_checkpoint_path(self):
         checkpoint_path = self._selected_checkpoint_path()
         if checkpoint_path is None:
             raise RuntimeError("No MedSAM2 checkpoint selected. Add MedSAM2*.pt files in checkpoints/MedSAM2/.")
 
         if not checkpoint_path.exists():
             raise RuntimeError(f"Selected checkpoint does not exist: {checkpoint_path}")
-
-        if self.segmenter is None:
-            self.segmenter = self._create_segmenter_for_selection(checkpoint_path)
+        return checkpoint_path
 
     def _ensure_ready_for_segmentation(self):
         if self.pixel_array is None or self.dicom_dataset is None:
@@ -971,6 +980,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _invalidate_segmentation(self):
         self.segmentation_mask = None
+        self.segmentation_contours = None
+        self.segmentation_splines = None
+        self.segmentation_spline_nodes = None
+        self.update_cross_section_view()
+
+    def _invalidate_object(self, obj_id):
+        """Drop one object's labels after its prompts changed; other objects keep their masks."""
+        if self.segmentation_mask is not None:
+            self.segmentation_mask[self.segmentation_mask == obj_id] = 0
+        # Contours and splines are derived from the whole mask, so they are rebuilt on demand.
         self.segmentation_contours = None
         self.segmentation_splines = None
         self.segmentation_spline_nodes = None
@@ -1060,45 +1079,54 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         details_tail = details[-4000:]
         return f"{base_message}\n\nBackend details:\n{details_tail}"
 
-    def _run_segmentation(self, start_message, finish_message, segment_fn, on_done, needs_segmenter=True):
+    def _run_segmentation(self, start_message, finish_message, segment_fn, on_done,
+                          needs_segmenter=True, indeterminate=False):
         """Run segment_fn(segmenter, progress) on a worker thread, then on_done(result) on the GUI thread.
 
         The central widget is disabled while the worker runs, so the user cannot edit
         key frames or points mid-run. on_done may start another run (chained stages).
+        A model that is not loaded yet is built on the worker thread.
         """
         if self._worker is not None:
             self.show_status("A segmentation is already running.")
             return
-        segmenter = None
+        checkpoint_path = None
         if needs_segmenter:
             try:
-                self._ensure_segmenter()
-            except Exception as exc:
-                QMessageBox.critical(
-                    self,
-                    "Segmentation error",
-                    self._format_segmentation_error(exc, traceback_text=traceback.format_exc()),
-                )
+                checkpoint_path = self._checked_checkpoint_path()
+            except RuntimeError as exc:
+                QMessageBox.critical(self, "Segmentation error", str(exc))
                 return
-            segmenter = self.segmenter
+        # The worker writes the segmenter here; the GUI thread stores it on success or failure.
+        holder = {"segmenter": self.segmenter}
+
+        def work(progress):
+            if needs_segmenter and holder["segmenter"] is None:
+                holder["segmenter"] = self._create_segmenter_for_selection(checkpoint_path)
+            return segment_fn(holder["segmenter"], progress)
+
         self.stop_playback()
-        self._start_segmentation_progress(start_message)
+        self._start_segmentation_progress(start_message, indeterminate=indeterminate)
         self.centralWidget().setEnabled(False)
-        worker = SegmentationWorker(lambda progress: segment_fn(segmenter, progress), self)
+        worker = SegmentationWorker(work, self)
         worker.progress.connect(self._update_segmentation_progress)
-        worker.succeeded.connect(lambda result: self._on_segmentation_succeeded(result, finish_message, on_done))
-        worker.failed.connect(self._on_segmentation_failed)
+        worker.succeeded.connect(
+            lambda result: self._on_segmentation_succeeded(result, finish_message, on_done, holder)
+        )
+        worker.failed.connect(lambda message: self._on_segmentation_failed(message, holder))
         worker.finished.connect(lambda: self._on_worker_finished(worker))
         self._worker = worker
         worker.start()
 
-    def _on_segmentation_succeeded(self, result, finish_message, on_done):
+    def _on_segmentation_succeeded(self, result, finish_message, on_done, holder):
         self._worker = None
+        self.segmenter = holder["segmenter"]
         self._finish_segmentation_progress(finish_message)
         on_done(result)
 
-    def _on_segmentation_failed(self, message):
+    def _on_segmentation_failed(self, message, holder):
         self._worker = None
+        self.segmenter = holder["segmenter"]
         self.seg_progress_bar.setVisible(False)
         QMessageBox.critical(self, "Segmentation error", message)
 
@@ -1342,56 +1370,74 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_status("No segmentation mask available. Run segmentation first.")
             return
 
-        epsilon = float(self.epsilonSpinBox.value())
-        use_approx = epsilon > 0.0
-
-        try:
-            contour_map = find_external_contours(self.segmentation_mask, epsilon=epsilon)
-        except ValueError:
+        if self.segmentation_mask.ndim not in (2, 3):
             self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
             return
 
-        self.segmentation_contours = contour_map
-        self.segmentation_splines = None
-        self.segmentation_spline_nodes = None
-        color = (255, 255, 0, 255)
-        self.imageView.set_contour_color(color)
-        self.refresh_point_overlay()
-        self.update_cross_section_view()
+        epsilon = float(self.epsilonSpinBox.value())
+        use_approx = epsilon > 0.0
+        mask = self.segmentation_mask
         if use_approx:
-            self.show_status(f"External contours extracted (approxPolyDP, epsilon={epsilon:g}).", 5000)
+            finish_message = f"External contours extracted (approxPolyDP, epsilon={epsilon:g})."
         else:
-            self.show_status("External contours extracted (no approximation).", 5000)
+            finish_message = "External contours extracted (no approximation)."
+
+        def extract(_segmenter, _progress):
+            return find_external_contours(mask, epsilon=epsilon)
+
+        def apply(contour_map):
+            self.segmentation_contours = contour_map
+            self.segmentation_splines = None
+            self.segmentation_spline_nodes = None
+            self.imageView.set_contour_color((255, 255, 0, 255))
+            self.refresh_point_overlay()
+            self.update_cross_section_view()
+
+        self._run_segmentation(
+            "Extracting contours...",
+            finish_message,
+            extract,
+            apply,
+            needs_segmenter=False,
+            indeterminate=True,
+        )
 
     def fit_contour_splines(self):
         if self.segmentation_mask is None and self.segmentation_contours is None:
             self.show_status("No segmentation mask available. Run segmentation first.")
             return
 
-        if self.segmentation_contours is None:
-            try:
-                epsilon = float(self.epsilonSpinBox.value())
-                self.segmentation_contours = find_external_contours(self.segmentation_mask, epsilon=epsilon)
-            except ValueError:
-                self.show_status(f"Unsupported mask shape: {self.segmentation_mask.shape}")
-                return
-
+        epsilon = float(self.epsilonSpinBox.value())
         num_control_points = int(self.splineNodesSpinBox.value())
-        try:
-            self.segmentation_splines, self.segmentation_spline_nodes = fit_spline_contours(
-                self.segmentation_contours,
+        mask = self.segmentation_mask
+        contours = self.segmentation_contours
+
+        def fit(_segmenter, _progress):
+            contour_map = contours
+            if contour_map is None:
+                contour_map = find_external_contours(mask, epsilon=epsilon)
+            splines, nodes = fit_spline_contours(
+                contour_map,
                 num_control_points=num_control_points,
                 num_samples=num_control_points * 10,
                 return_nodes=True,
             )
-        except ValueError as exc:
-            self.show_status(str(exc))
-            return
+            return contour_map, splines, nodes
 
-        self.imageView.set_spline_color((0, 255, 255, 255))
-        self.imageView.set_spline_nodes_color((255, 80, 80, 255))
-        self.refresh_point_overlay()
-        self.show_status(f"Spline fitting complete (control points: {num_control_points}).", 5000)
+        def apply(result):
+            self.segmentation_contours, self.segmentation_splines, self.segmentation_spline_nodes = result
+            self.imageView.set_spline_color((0, 255, 255, 255))
+            self.imageView.set_spline_nodes_color((255, 80, 80, 255))
+            self.refresh_point_overlay()
+
+        self._run_segmentation(
+            "Fitting splines...",
+            f"Spline fitting complete (control points: {num_control_points}).",
+            fit,
+            apply,
+            needs_segmenter=False,
+            indeterminate=True,
+        )
 
     def open_dicom_file(self):
         file_dialog = QFileDialog(self)
@@ -1429,6 +1475,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 else:
                     display_array = np.swapaxes(self.pixel_array, -2, -1)
                 self.imageView.setImage(display_array)
+                self.imageView.set_frame_count(self._frame_count())
                 self.imageView.set_mask(None)
                 self.imageView.set_contours([])
                 self.imageView.set_splines([])

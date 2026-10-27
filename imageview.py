@@ -30,6 +30,8 @@ class ImageView(pg.ImageView):
         # self.ui.roiPlot.hideButtons()
         self.timeLine.sigPositionChanged.connect(self._on_timeline_changed)
 
+        # Number of frames on the timeline; set by the owner, since RGB frames look 3D.
+        self._frame_count = 1
         # Dynamic scatter overlays by object id.
         self._point_items = {}
         self._points_visible = True
@@ -93,6 +95,9 @@ class ImageView(pg.ImageView):
         self.view.scene().sigMouseClicked.connect(self._on_scene_click)
         self.ui.roiPlot.scene().sigMouseClicked.connect(self._on_timeline_click)
 
+    def set_frame_count(self, frame_count):
+        self._frame_count = max(1, int(frame_count))
+
     def _on_timeline_changed(self, *args):
         self.frameChanged.emit(self.currentIndex)
 
@@ -125,7 +130,7 @@ class ImageView(pg.ImageView):
         if self.image is None:
             return
 
-        frame_count = self.image.shape[0] if self.image.ndim > 2 else 1
+        frame_count = self._frame_count
         if frame_count <= 1:
             return
 

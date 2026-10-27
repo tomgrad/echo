@@ -61,6 +61,22 @@ def fix_labeled_mask(mask: np.ndarray, iterations: int, progress_callback=None) 
     raise ValueError(f"Unsupported mask shape: {mask.shape}")
 
 
+def contours_to_jsonable(contour_map: dict[int, list[np.ndarray]]) -> dict[str, list[list[list[int]]]]:
+    """Convert {frame: [(N, 2) arrays]} into JSON-serializable nested lists (JSON keys are strings)."""
+    return {
+        str(int(frame_idx)): [np.asarray(contour).tolist() for contour in contours]
+        for frame_idx, contours in contour_map.items()
+    }
+
+
+def contours_from_jsonable(data: dict[str, list[list[list[int]]]]) -> dict[int, list[np.ndarray]]:
+    """Inverse of contours_to_jsonable."""
+    return {
+        int(frame_idx): [np.asarray(contour, dtype=np.int32) for contour in contours]
+        for frame_idx, contours in data.items()
+    }
+
+
 def _extract_contours_from_frame(mask_2d: np.ndarray, epsilon: float, use_approx: bool) -> list[np.ndarray]:
     frame_mask = (mask_2d > 0).astype(np.uint8)
     found = cv2.findContours(frame_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
