@@ -30,8 +30,14 @@ def _resolve_runtime_dependencies(label):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required by the MedSeg2 workflow.")
 
-    torch.set_float32_matmul_precision("high")
     return torch, build_sam2_video_predictor_npz
+
+
+def configure_torch_for_inference():
+    """Set the process-wide float32 matmul precision. Call once at startup, not per segmenter."""
+    import torch
+
+    torch.set_float32_matmul_precision("high")
 
 
 @dataclass
@@ -82,24 +88,29 @@ class MedSam2Segmenter:
         dicom_ds,
         percentile_clip: Tuple[float, float] = (0.5, 99.5),
     ) -> PreparedVolume:
-        arr = pixel_array.astype(np.float32)
-        if arr.ndim == 4 and arr.shape[-1] == 3:
+        if pixel_array.ndim == 4 and pixel_array.shape[-1] == 3:
             # RGB frames: segment on the channel mean (grayscale).
-            arr = arr.mean(axis=-1)
-        if arr.ndim == 2:
-            vol = arr[None, ...]
-        elif arr.ndim == 3:
-            vol = arr
+            vol = pixel_array.mean(axis=-1, dtype=np.float32)
+        elif pixel_array.ndim == 2:
+            vol = pixel_array[None, ...]
+        elif pixel_array.ndim == 3:
+            vol = pixel_array
         else:
-            raise ValueError(f"Unsupported pixel_array shape: {arr.shape}")
+            raise ValueError(f"Unsupported pixel_array shape: {pixel_array.shape}")
 
         lo_p, hi_p = percentile_clip
         lo, hi = np.percentile(vol, [float(lo_p), float(hi_p)])
+        # Clipping is monotone, so the clipped min/max follow from the raw min/max.
+        clipped_min = float(np.clip(vol.min(), lo, hi))
+        clipped_max = float(np.clip(vol.max(), lo, hi))
+        scale = max(clipped_max - clipped_min, 1e-6)
 
-        vol_clip = np.clip(vol, lo, hi)
-        vol_u8 = (
-            (vol_clip - vol_clip.min()) / max(vol_clip.max() - vol_clip.min(), 1e-6) * 255.0
-        ).astype(np.uint8)
+        # Quantize in chunks of frames so no full float32 copy of the volume is made.
+        vol_u8 = np.empty(vol.shape, dtype=np.uint8)
+        for start in range(0, vol.shape[0], 16):
+            end = min(start + 16, vol.shape[0])
+            clipped = np.clip(vol[start:end].astype(np.float32), lo, hi)
+            vol_u8[start:end] = ((clipped - clipped_min) / scale * 255.0).astype(np.uint8)
 
         height, width = vol_u8.shape[1:]
 

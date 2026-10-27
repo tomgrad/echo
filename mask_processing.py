@@ -97,7 +97,7 @@ def find_external_contours(mask: np.ndarray, epsilon: float = 0.0) -> dict[int, 
     Returns:
         Dict mapping frame index to list of contour point arrays.
     """
-    mask = np.asarray(mask).astype(np.uint8)
+    mask = np.asarray(mask)
     contour_map: dict[int, list[np.ndarray]] = {}
     use_approx = float(epsilon) > 0.0
 

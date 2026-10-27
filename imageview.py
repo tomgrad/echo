@@ -38,9 +38,6 @@ class ImageView(pg.ImageView):
         self._mask_item = pg.ImageItem()
         self._mask_item.setZValue(10)
         self._mask_item.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        self._mask_lut = np.zeros((256, 4), dtype=np.ubyte)
-        self._mask_item.setLookupTable(self._mask_lut)
-        self._mask_item.setLevels((0, 255))
         self._contour_color = (255, 255, 0, 255)
         self._contour_width = 4
         self._contour_item = pg.PlotDataItem(
@@ -173,17 +170,6 @@ class ImageView(pg.ImageView):
         self._point_items[obj_id] = {"positive": pos, "negative": neg}
         return self._point_items[obj_id]
 
-    def _set_mask_lut_for_labels(self, max_label):
-        max_label = max(0, int(max_label))
-        size = max(256, max_label + 1)
-        lut = np.zeros((size, 4), dtype=np.ubyte)
-        for label in range(1, max_label + 1):
-            color = self._color_for_obj_id(label)
-            rgba = color.getRgb()
-            lut[label] = [rgba[0], rgba[1], rgba[2], 160]
-        self._mask_lut = lut
-        self._mask_item.setLookupTable(self._mask_lut)
-
     def set_points_by_object(self, points_by_object):
         """Update prompt points for all objects.
 
@@ -219,11 +205,16 @@ class ImageView(pg.ImageView):
         if mask_2d is None:
             self._mask_item.clear()
         else:
-            # Keep label values as direct LUT indices (0..255) so obj_id maps to lut[obj_id].
-            mask_u8 = np.clip(mask_2d, 0, 255).astype(np.uint8, copy=False).T
-            max_label = int(mask_u8.max()) if mask_u8.size else 0
-            self._set_mask_lut_for_labels(max_label)
-            self._mask_item.setImage(mask_u8, autoLevels=False, levels=(0, 255))
+            # Colour each label directly into RGBA, so labels above 255 are not truncated.
+            labels = np.asarray(mask_2d)
+            palette = np.zeros((int(labels.max()) + 1 if labels.size else 1, 4), dtype=np.uint8)
+            for label in np.unique(labels):
+                if label == 0:
+                    continue
+                rgba = self._color_for_obj_id(int(label)).getRgb()
+                palette[label] = [rgba[0], rgba[1], rgba[2], 160]
+            # Image axes are (x=col, y=row), so transpose (rows, cols, 4) -> (cols, rows, 4).
+            self._mask_item.setImage(palette[labels].transpose(1, 0, 2), autoLevels=False)
         self.view.update()
 
     def set_mask_visible(self, visible):

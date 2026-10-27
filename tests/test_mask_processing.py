@@ -66,6 +66,13 @@ def test_find_external_contours_per_frame():
         assert pts[:, 0].min() == 5 and pts[:, 0].max() == 14
 
 
+def test_find_external_contours_keeps_labels_above_255():
+    mask = np.zeros((1, 20, 20), dtype=np.uint16)
+    mask[0, 5:15, 5:15] = 300
+    contours = find_external_contours(mask, epsilon=0.0)
+    assert len(contours[0]) == 1
+
+
 def test_find_external_contours_rejects_bad_shape():
     with pytest.raises(ValueError):
         find_external_contours(np.zeros((2, 2, 2, 2)), epsilon=0.0)
