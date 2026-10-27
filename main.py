@@ -151,6 +151,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def _reset_custom_line(self):
         """Place the custom line vertically across the middle of the frame, return its endpoints."""
+        if self.cross_section_volume is None or self.cross_section_volume.ndim != 3:
+            return None
         _, height, width = self.cross_section_volume.shape
         p0 = (0.5 * (width - 1), 0.15 * (height - 1))
         p1 = (0.5 * (width - 1), 0.85 * (height - 1))
@@ -830,17 +832,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except ET.ParseError as exc:
             QMessageBox.critical(self, "Load error", f"Could not parse file:\n{exc}")
             return
+        # Parse into local containers; replace app state only if the whole file is valid.
+        key_frames = []
+        key_frame_points = {}
+        key_frame_outlines = {}
+        frame_count = self._frame_count()
         try:
             root = tree.getroot()
             if root.tag != "keyframes":
                 raise ValueError("Not a valid key frames file.")
-            self.key_frames.clear()
-            self.key_frame_points.clear()
-            self.key_frame_outlines.clear()
             for kf_el in root.findall("keyframe"):
                 frame_idx = int(kf_el.get("index"))
-                if frame_idx not in self.key_frames:
-                    self.key_frames.append(frame_idx)
+                if frame_count and not 0 <= frame_idx < frame_count:
+                    raise ValueError(f"Key frame {frame_idx} is outside the loaded image ({frame_count} frames).")
+                if frame_idx not in key_frames:
+                    key_frames.append(frame_idx)
                 for outline_el in kf_el.findall("outline"):
                     obj_id = int(outline_el.get("obj_id"))
                     vertices = [
@@ -848,7 +854,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         for vertex_el in outline_el.findall("vertex")
                     ]
                     if vertices:
-                        self.key_frame_outlines.setdefault(obj_id, {})[frame_idx] = vertices
+                        key_frame_outlines.setdefault(obj_id, {})[frame_idx] = vertices
                 for pt_el in kf_el.findall("point"):
                     x = pt_el.get("x")
                     y = pt_el.get("y")
@@ -858,7 +864,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         raise ValueError(
                             "Invalid keyframe file: each point must include x, y, positive, and obj_id"
                         )
-                    self.key_frame_points.setdefault(int(obj_id), {}).setdefault(frame_idx, []).append([
+                    key_frame_points.setdefault(int(obj_id), {}).setdefault(frame_idx, []).append([
                         int(x),
                         int(y),
                         positive == "true",
@@ -866,8 +872,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except (TypeError, ValueError) as exc:
             QMessageBox.critical(self, "Load error", f"Could not load key frames:\n{exc}")
             return
+        self.key_frames = sorted(key_frames)
+        self.key_frame_points = key_frame_points
+        self.key_frame_outlines = key_frame_outlines
         self._invalidate_segmentation()
-        self.key_frames.sort()
         self.refresh_key_frames_list()
         self.refresh_point_overlay()
         self.show_status(f"Loaded {len(self.key_frames)} key frame(s) from {path}", 6000)
@@ -1334,7 +1342,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 dicom = pydicom.dcmread(dicom_file_path)
                 self.dicom_dataset = dicom
                 pixel_array = dicom.pixel_array
-                if pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
+                if FRAMES_LIMIT > 0 and pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
                     pixel_array = pixel_array[:FRAMES_LIMIT]
                 self.pixel_array = pixel_array
                 self.imageView.remove_line()
