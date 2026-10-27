@@ -62,6 +62,11 @@ class MedSam2Segmenter:
         )
         self._predictor = self._create_predictor()
 
+    def release(self):
+        """Drop the predictor and return its GPU memory to the allocator."""
+        self._predictor = None
+        self.torch.cuda.empty_cache()
+
     def _create_predictor(self):
         hydra_overrides_extra = [f"++model.image_size={int(self.image_size)}"]
         return self._build_sam2_video_predictor_npz(
@@ -140,10 +145,6 @@ class MedSam2Segmenter:
             take_obj = obj_mask & ((merged == 0) | (out_obj_id < merged))
             merged[take_obj] = out_obj_id
         return merged
-
-    @staticmethod
-    def _binary_mask_for_obj(label_volume: np.ndarray, obj_id: int) -> np.ndarray:
-        return (np.asarray(label_volume) == int(obj_id)).astype(np.uint8)
 
     def _apply_prompts_on_frame(
         self,
@@ -259,26 +260,6 @@ class MedSam2Segmenter:
 
         return segs_3d
 
-    def segment_single_keyframe(
-        self,
-        pixel_array: np.ndarray,
-        dicom_ds,
-        frame_idx: int,
-        obj_id: int,
-        frame_points: Sequence[Sequence[int]],
-        percentile_clip: Tuple[float, float] = (0.5, 99.5),
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> np.ndarray:
-        label_volume = self.segment_single_keyframe_multi_object(
-            pixel_array=pixel_array,
-            dicom_ds=dicom_ds,
-            frame_idx=frame_idx,
-            frame_points_by_obj={int(obj_id): frame_points},
-            percentile_clip=percentile_clip,
-            progress_callback=progress_callback,
-        )
-        return self._binary_mask_for_obj(label_volume, obj_id)
-
     def segment_single_keyframe_multi_object(
         self,
         pixel_array: np.ndarray,
@@ -298,28 +279,6 @@ class MedSam2Segmenter:
             reverse=False,
             progress_callback=progress_callback,
         )
-
-    def segment_forward_range(
-        self,
-        pixel_array: np.ndarray,
-        dicom_ds,
-        start_frame_idx: int,
-        end_frame_idx: int,
-        obj_id: int,
-        start_frame_points: Sequence[Sequence[int]],
-        percentile_clip: Tuple[float, float] = (0.5, 99.5),
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> np.ndarray:
-        label_volume = self.segment_forward_range_multi_object(
-            pixel_array=pixel_array,
-            dicom_ds=dicom_ds,
-            start_frame_idx=start_frame_idx,
-            end_frame_idx=end_frame_idx,
-            start_frame_points_by_obj={int(obj_id): start_frame_points},
-            percentile_clip=percentile_clip,
-            progress_callback=progress_callback,
-        )
-        return self._binary_mask_for_obj(label_volume, obj_id)
 
     def segment_forward_range_multi_object(
         self,
@@ -341,28 +300,6 @@ class MedSam2Segmenter:
             reverse=False,
             progress_callback=progress_callback,
         )
-
-    def segment_backward_range(
-        self,
-        pixel_array: np.ndarray,
-        dicom_ds,
-        start_frame_idx: int,
-        end_frame_idx: int,
-        obj_id: int,
-        start_frame_points: Sequence[Sequence[int]],
-        percentile_clip: Tuple[float, float] = (0.5, 99.5),
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> np.ndarray:
-        label_volume = self.segment_backward_range_multi_object(
-            pixel_array=pixel_array,
-            dicom_ds=dicom_ds,
-            start_frame_idx=start_frame_idx,
-            end_frame_idx=end_frame_idx,
-            start_frame_points_by_obj={int(obj_id): start_frame_points},
-            percentile_clip=percentile_clip,
-            progress_callback=progress_callback,
-        )
-        return self._binary_mask_for_obj(label_volume, obj_id)
 
     def segment_backward_range_multi_object(
         self,
@@ -487,8 +424,6 @@ class MedSam2Segmenter:
                 ):
                     if out_frame_idx > first_kf:
                         continue
-                    if out_frame_idx < 0:
-                        break
                     segs_3d[out_frame_idx] = self._frame_from_logits(out_obj_ids, out_mask_logits)
                     if out_frame_idx not in processed:
                         processed.add(out_frame_idx)

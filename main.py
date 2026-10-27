@@ -451,6 +451,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def _release_segmenter(self):
         if self.segmenter is None:
             return
+        self.segmenter.release()
         self.segmenter = None
 
     def _populate_checkpoints_combo(self):
@@ -1442,7 +1443,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
 
 
-app = QApplication(sys.argv)
-window = MainWindow()
-window.show()
-app.exec()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
