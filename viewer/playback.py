@@ -110,9 +110,7 @@ class PlaybackController(QObject):
             self.shared_clock.set_position_s(0.0)
         for viewport, clock in self._clocks:
             clock.set_position_s(0.0)
-        for viewport in self._viewports:
-            if viewport.recording is None:
-                continue
+        for viewport in self._visible_viewports():
             viewport.show_time(0.0, hold_at_end=self._synced)
         if was_playing:
             self.play()

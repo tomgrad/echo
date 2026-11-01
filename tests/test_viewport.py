@@ -1,12 +1,16 @@
+import gc
 import os
-
+import threading
 import time
+import weakref
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.frames import FrameCache, PrefetchPool, decode_loop  # noqa: E402
+import dicom_io  # noqa: E402
+from viewer.frames import FrameCache, PrefetchPool, decode_frame, decode_loop  # noqa: E402
 from viewer.session import scan_session  # noqa: E402
 from viewer.viewport import RecordingViewport  # noqa: E402
 
@@ -52,17 +56,22 @@ def test_monochrome_viewport_computes_levels(write_dicom):
     app.processEvents()
 
 
-def test_levels_stay_fixed_when_loop_arrives(write_dicom):
+def test_levels_use_middle_frame_until_loop_arrives_then_loop_levels(write_dicom):
     app = QApplication.instance() or QApplication([])
     path, _ = write_dicom("mono.dcm", frames=4, color=False)
     info = scan_session(path.parent).recordings[0]
     viewport = RecordingViewport(FrameCache(budget_bytes=10_000_000))
     viewport.set_recording(info)
-    before = viewport.levels
+    mid_levels = dicom_io.mono_levels(decode_frame(info, 2))
+    assert viewport.levels == mid_levels  # pre-prefetch fallback
     loop = decode_loop(info)
-    assert loop.levels != before  # percentiles over all frames differ
+    assert loop.levels != mid_levels  # the two level pairs must differ
     viewport.set_loop(loop)
-    assert viewport.levels == before
+    assert viewport.levels == loop.levels
+    viewport.show_time(0.05, hold_at_end=False)
+    viewport.show_time(0.10, hold_at_end=False)
+    _wait(app, lambda: not viewport._decode_busy)
+    assert viewport.levels == loop.levels  # stays fixed across later frames
     viewport.close()
     app.processEvents()
 
@@ -136,14 +145,16 @@ def test_bottom_label_shows_counter_and_state(write_dicom):
     app = QApplication.instance() or QApplication([])
     path, _ = write_dicom("rec.dcm", frames=3, color=True)
     info = scan_session(path.parent).recordings[0]
-    viewport = RecordingViewport(FrameCache(budget_bytes=10_000_000))
+    cache = FrameCache(budget_bytes=10_000_000)
+    viewport = RecordingViewport(cache)
     viewport.set_recording(info)
     assert viewport._bottom_left.text() == "1/3 · LOADING"
     viewport.show_time(0.05, hold_at_end=False)
     assert viewport._bottom_left.text() == "2/3 · LOADING"
     viewport.mark_prefetch_failed()
     assert viewport._bottom_left.text() == "2/3 · ON DEMAND"
-    viewport.set_loop(decode_loop(info))
+    cache.put(info.path, decode_loop(info))
+    viewport.set_loop(cache.get(info.path))
     assert viewport._bottom_left.text() == "2/3 · LOOP"
     viewport.close()
     app.processEvents()
@@ -172,5 +183,109 @@ def test_mono_setup_failure_clears_previous_image_and_levels(write_dicom, monkey
     assert not viewport._image.isVisible()
     assert viewport.levels is None
     assert "error: boom" in viewport._bottom_left.text()
+    viewport.close()
+    app.processEvents()
+
+
+def _record_shown(monkeypatch):
+    shown = []
+    original = RecordingViewport.show_frame
+
+    def spy(self, frame):
+        shown.append(np.array(frame))
+        return original(self, frame)
+
+    monkeypatch.setattr(RecordingViewport, "show_frame", spy)
+    return shown
+
+
+def test_evicted_loop_is_not_retained_by_viewport(write_dicom, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    path_a, arr_a = write_dicom("a.dcm", frames=4, color=False)
+    path_b, _ = write_dicom("b.dcm", frames=4, color=False)
+    recs = {r.path.name: r for r in scan_session(path_a.parent).recordings}
+    a, b = recs["a.dcm"], recs["b.dcm"]
+    loop_a_bytes = decode_loop(a).frames.nbytes
+    cache = FrameCache(budget_bytes=loop_a_bytes + 10)  # holds one loop only
+    viewport = RecordingViewport(cache)
+    shown = _record_shown(monkeypatch)
+    viewport.set_recording(a)
+    loop_a = decode_loop(a)
+    cache.put(a.path, loop_a)
+    viewport.set_loop(loop_a)
+    loop_ref = weakref.ref(loop_a)
+    frames_ref = weakref.ref(loop_a.frames)
+    del loop_a
+    cache.put(b.path, decode_loop(b))  # evicts a
+    assert cache.get(a.path) is None
+    gc.collect()
+    assert loop_ref() is None and frames_ref() is None
+    # The tile still shows its recording, decoding on demand from the file.
+    viewport.show_time(0.05, hold_at_end=False)
+    _wait(app, lambda: shown and np.array_equal(shown[-1], arr_a[1]))
+    assert np.array_equal(shown[-1], arr_a[1])
+    assert viewport.current_frame_index() == 1
+    viewport.close()
+    app.processEvents()
+
+
+def test_rapid_requests_keep_one_decode_in_flight_and_show_last(write_dicom, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    path, arr = write_dicom("mono.dcm", frames=8, color=False)
+    info = scan_session(path.parent).recordings[0]
+    shown = _record_shown(monkeypatch)
+    import viewer.viewport as viewport_module
+
+    lock = threading.Lock()
+    stats = {"active": 0, "max_active": 0, "calls": 0}
+    real_decode = viewport_module.decode_frame
+
+    def slow_decode(info, index):
+        with lock:
+            stats["active"] += 1
+            stats["max_active"] = max(stats["max_active"], stats["active"])
+            stats["calls"] += 1
+        try:
+            time.sleep(0.01)
+            return real_decode(info, index)
+        finally:
+            with lock:
+                stats["active"] -= 1
+
+    monkeypatch.setattr(viewport_module, "decode_frame", slow_decode)
+    viewport = RecordingViewport(FrameCache(budget_bytes=10_000_000))
+    viewport.set_recording(info)  # first frame is decoded synchronously
+    for i in range(1, 8):  # rapid requests on a cache-miss tile
+        viewport.show_time(i / 25, hold_at_end=False)
+    assert viewport.current_frame_index() == 7
+    _wait(app, lambda: shown and np.array_equal(shown[-1], arr[7]) and not viewport._decode_busy)
+    assert np.array_equal(shown[-1], arr[7])
+    assert stats["max_active"] == 1
+    assert stats["calls"] < 8  # not one decode per request
+    viewport.close()
+    app.processEvents()
+
+
+def test_slider_user_move_scrubs_once_programmatic_updates_do_not(write_dicom):
+    app = QApplication.instance() or QApplication([])
+    path, _ = write_dicom("rec.dcm", frames=4, color=True)
+    info = scan_session(path.parent).recordings[0]
+    cache = FrameCache(budget_bytes=10_000_000)
+    viewport = RecordingViewport(cache)
+    got = []
+    viewport.scrub_requested.connect(lambda v, i: got.append((v, i)))
+    viewport.set_recording(info)  # range reset and first frame: no scrub
+    viewport.clear()
+    viewport.set_recording(info)
+    assert got == []
+    viewport._slider.setValue(2)  # keyboard/mouse-like move from outside
+    assert got == [(viewport, 2)]
+    viewport.show_time(0.05, hold_at_end=False)  # internal display update
+    _wait(app, lambda: not viewport._decode_busy)
+    assert viewport.current_frame_index() == 1
+    assert got == [(viewport, 2)]
+    cache.put(info.path, decode_loop(info))
+    viewport.show_time(0.10, hold_at_end=False)  # cache-hit path, still silent
+    assert got == [(viewport, 2)]
     viewport.close()
     app.processEvents()

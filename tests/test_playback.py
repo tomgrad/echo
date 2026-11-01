@@ -162,3 +162,11 @@ def test_independent_private_tick_skips_hidden_and_recordingless(controller):
     assert visible.calls == [(0.3, False)]
     assert hidden.calls == []
     assert no_recording.calls == []
+
+
+def test_toggling_sync_skips_hidden_viewports(controller):
+    long, short, still, hidden = _viewports(controller)
+    controller.set_synced(False)
+    assert hidden.calls == []
+    assert long.calls == [(0.0, False)]
+    assert short.calls == [(0.0, False)]

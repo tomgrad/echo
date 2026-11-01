@@ -97,8 +97,8 @@ def test_shared_path_survives_closing_or_replacing_one_tile(tmp_path, write_dico
     assert v[1].recording == rec[1]
     assert cancelled == []
 
-    _wait(app, lambda: v[0]._loop is not None)
-    assert v[0]._loop is not None  # surviving tile still receives its loop
+    _wait(app, lambda: w.cache.get(rec[0].path) is not None)
+    assert w.cache.get(rec[0].path) is not None  # surviving tile still reads its loop
 
     v[0].closed.emit(v[0])  # last tile on rec[0] -> its prefetch is cancelled
     assert cancelled == [rec[0].path]
@@ -120,8 +120,9 @@ def test_loop_ready_fans_out_to_every_tile_showing_path(tmp_path, write_dicom):
 
     loop = decode_loop(rec[0])
     w._on_loop_ready(rec[0], loop)  # called directly; no event processing in between
-    assert v[0]._loop is loop and v[1]._loop is loop
-    assert v[2]._loop is not loop
+    assert w.cache.get(rec[0].path) is loop
+    assert v[0]._state() == "LOOP" and v[1]._state() == "LOOP"
+    assert v[2]._state() != "LOOP"
     w.close()
     app.processEvents()
 

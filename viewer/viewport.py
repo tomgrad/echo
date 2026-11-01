@@ -1,6 +1,6 @@
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -27,17 +27,43 @@ def _overlay_label(parent) -> QLabel:
     return label
 
 
+class _FrameTask(QRunnable):
+    """Decode one frame off the GUI thread; the result carries its generation."""
+
+    def __init__(self, viewport, info: RecordingInfo, index: int, generation: int):
+        super().__init__()
+        self._viewport = viewport
+        self._info = info
+        self._index = index
+        self._generation = generation
+
+    def run(self):
+        try:
+            frame = decode_frame(self._info, self._index)
+            result = (self._generation, self._index, frame, None)
+        except Exception as exc:
+            result = (self._generation, self._index, None, str(exc) or type(exc).__name__)
+        self._viewport._frame_decoded.emit(result)
+
+
 class RecordingViewport(QFrame):
     activated = Signal(object)
     closed = Signal(object)
     scrub_requested = Signal(object, int)
     error = Signal(str)
+    _frame_decoded = Signal(object)  # worker thread -> GUI thread (queued)
 
     def __init__(self, cache: FrameCache, parent=None) -> None:
         super().__init__(parent)
         self._cache = cache
-        self._loop: Loop | None = None
         self._index = 0
+        # On-demand decodes: at most one in flight per tile, latest request wins.
+        self._generation = 0
+        self._decode_busy = False
+        self._wanted = 0
+        self._decode_pool = QThreadPool(self)
+        self._decode_pool.setMaxThreadCount(1)
+        self._frame_decoded.connect(self._on_frame_decoded)
         self._failed = False
         self._error: str | None = None
         self._prefetch_failed = False
@@ -71,7 +97,7 @@ class RecordingViewport(QFrame):
         self._plot.installEventFilter(self)
 
         self._slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._slider.sliderMoved.connect(self._on_slider_moved)
+        self._slider.valueChanged.connect(self._on_slider_value)
         self._counter = QLabel(self)
         self._close_button = QPushButton("×", self)
         self._close_button.setFixedWidth(28)
@@ -91,14 +117,14 @@ class RecordingViewport(QFrame):
     # ----- public API -------------------------------------------------
 
     def set_recording(self, info: RecordingInfo) -> None:
+        self._cancel_decodes()
         self.recording = info
         self.timeline = Timeline(frame_count=info.frames, fps=info.fps)
-        self._loop = None
         self._failed = False
         self._error = None
         self._prefetch_failed = False
         self._index = 0
-        self._slider.setRange(0, max(info.frames - 1, 0))
+        self._set_slider_range(0, max(info.frames - 1, 0))
         self._slider.setVisible(not info.is_still and info.frames > 1)
         self._empty.hide()
         self._top_left.setText(
@@ -127,7 +153,7 @@ class RecordingViewport(QFrame):
                 self._fail(str(exc) or type(exc).__name__)
                 self._place_overlays()
                 return
-        self.show_time(0.0, hold_at_end=False)
+        self._show_index(0, sync=True)
         self._place_overlays()
 
     def set_levels(self, levels: tuple[float, float] | None) -> None:
@@ -136,7 +162,10 @@ class RecordingViewport(QFrame):
             self._show_index(self._index)
 
     def set_loop(self, loop: Loop) -> None:
-        self._loop = loop
+        # The frames stay in the shared FrameCache; the viewport keeps only the
+        # levels, which the prefetched loop makes stable for the whole recording.
+        if loop.levels is not None:
+            self.levels = loop.levels
         if self.recording is not None:
             self._show_index(self._index)
         self._refresh_bottom()
@@ -160,13 +189,17 @@ class RecordingViewport(QFrame):
         if self.recording is None:
             return
         self._image.setVisible(True)
+        # np.array copies: ImageItem would otherwise keep a view that pins the
+        # whole loop array after the cache evicts it.
         if self.recording.is_color:
             self._image.setImage(
-                dicom_io.display_array(frame, True), autoLevels=False, levels=None
+                np.array(dicom_io.display_array(frame, True)),
+                autoLevels=False,
+                levels=None,
             )
         else:
             self._image.setImage(
-                dicom_io.display_array(frame, False),
+                np.array(dicom_io.display_array(frame, False)),
                 autoLevels=False,
                 levels=self.levels,
             )
@@ -175,9 +208,9 @@ class RecordingViewport(QFrame):
         return self._index
 
     def clear(self) -> None:
+        self._cancel_decodes()
         self.recording = None
         self.timeline = None
-        self._loop = None
         self._failed = False
         self._error = None
         self._prefetch_failed = False
@@ -185,7 +218,7 @@ class RecordingViewport(QFrame):
         self.levels = None
         self._image.clear()
         self._image.setVisible(False)
-        self._slider.setRange(0, 0)
+        self._set_slider_range(0, 0)
         self._slider.setVisible(False)
         self._counter.setText("")
         self._top_left.hide()
@@ -227,30 +260,79 @@ class RecordingViewport(QFrame):
 
     # ----- internals --------------------------------------------------
 
-    def _on_slider_moved(self, value: int) -> None:
+    def shutdown(self) -> None:
+        """Stop on-demand decoding and wait for a running decode to finish."""
+        self._cancel_decodes()
+        self._decode_pool.waitForDone()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
+
+    def _cancel_decodes(self) -> None:
+        self._generation += 1
+        self._decode_busy = False
+        self._decode_pool.clear()
+
+    def _set_slider_range(self, low: int, high: int) -> None:
+        # A range change can clamp the value; that is not a user scrub.
+        self._slider.blockSignals(True)
+        self._slider.setRange(low, high)
+        self._slider.blockSignals(False)
+
+    def _on_slider_value(self, value: int) -> None:
+        # Programmatic updates block signals, so only user moves reach here.
         self.scrub_requested.emit(self, int(value))
 
-    def _show_index(self, index: int) -> None:
-        if self._failed or self.recording is None:
-            return
-        info = self.recording
-        loop = self._cache.get(info.path)
-        if loop is None:
-            loop = self._loop
-        if loop is not None:
-            frame = loop.frames[index]
-        else:
-            try:
-                frame = decode_frame(info, index)
-            except Exception as exc:
-                self._fail(str(exc) or type(exc).__name__)
-                return
-        self._index = index
+    def _present(self, index: int, frame: np.ndarray) -> None:
         self.show_frame(frame)
         self._slider.blockSignals(True)
         self._slider.setValue(index)
         self._slider.blockSignals(False)
         self._refresh_bottom()
+
+    def _start_decode(self) -> None:
+        self._decode_busy = True
+        self._decode_pool.start(
+            _FrameTask(self, self.recording, self._wanted, self._generation)
+        )
+
+    def _on_frame_decoded(self, result) -> None:
+        generation, index, frame, error = result
+        if generation != self._generation or self.recording is None:
+            return
+        self._decode_busy = False
+        if error is not None:
+            self._fail(error)
+            return
+        if index == self._wanted:
+            self._present(index, frame)
+        else:
+            # The user moved on while this decode ran: show the latest request.
+            self._show_index(self._wanted)
+
+    def _show_index(self, index: int, sync: bool = False) -> None:
+        if self._failed or self.recording is None:
+            return
+        info = self.recording
+        self._index = index
+        self._wanted = index
+        loop = self._cache.get(info.path)
+        if loop is not None:
+            self._present(index, loop.frames[index])
+            return
+        if sync:
+            try:
+                frame = decode_frame(info, index)
+            except Exception as exc:
+                self._fail(str(exc) or type(exc).__name__)
+                return
+            self._present(index, frame)
+            return
+        # Cache miss: the counter moves now, the frame follows from the worker.
+        self._refresh_bottom()
+        if not self._decode_busy:
+            self._start_decode()
 
     def _fail(self, message: str) -> None:
         self._failed = True
@@ -262,7 +344,7 @@ class RecordingViewport(QFrame):
         assert self.recording is not None
         if self.recording.is_still:
             return "STILL"
-        if self._loop is not None or self._cache.get(self.recording.path) is not None:
+        if self._cache.get(self.recording.path) is not None:
             return "LOOP"
         if self._prefetch_failed:
             return "ON DEMAND"

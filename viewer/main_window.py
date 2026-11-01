@@ -75,6 +75,8 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
 
     def closeEvent(self, event):
         self.controller.pause()
+        for viewport in self.viewports:
+            viewport.shutdown()
         worker = self._scan_worker
         if worker is not None and worker.isRunning():
             worker.requestInterruption()
@@ -109,10 +111,11 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             viewport.show()
 
     def _on_scan_thread_finished(self) -> None:
-        worker = self._scan_worker
-        if worker is None or not worker.isFinished():
+        worker = self.sender()
+        if worker is None:
             return
-        self._scan_worker = None
+        if worker is self._scan_worker:
+            self._scan_worker = None
         worker.deleteLater()
 
     def open_session(self) -> None:
