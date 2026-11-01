@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echo"
+version = "0.1.0"
+description = "Echocardiography tools: MedSAM2 segmentation and DICOM viewer"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pydicom",
+    "pyqtgraph",
+    "PySide6",
+]
+
+[project.optional-dependencies]
+seg = ["opencv-python", "scipy", "torch"]
+dev = ["pytest"]
+
+[project.scripts]
+echo-seg = "echo_seg.__main__:main"
+echo-viewer = "echo_viewer.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

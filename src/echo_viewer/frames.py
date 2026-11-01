@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
-import dicom_io
-from viewer.session import RecordingInfo
+from echo_core import dicom_io
+from echo_viewer.session import RecordingInfo
 
 
 @dataclass(frozen=True)

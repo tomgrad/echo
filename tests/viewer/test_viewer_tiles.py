@@ -5,9 +5,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.frames import decode_loop  # noqa: E402
-from viewer.main_window import ViewerWindow  # noqa: E402
-from viewer.session import Session, scan_session  # noqa: E402
+from echo_viewer.frames import decode_loop  # noqa: E402
+from echo_viewer.window import ViewerWindow  # noqa: E402
+from echo_viewer.session import Session, scan_session  # noqa: E402
 
 
 def _app():

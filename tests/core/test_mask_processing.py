@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from mask_processing import (
+from echo_core.masks import (
     build_custom_mask,
     contours_from_jsonable,
     contours_to_jsonable,

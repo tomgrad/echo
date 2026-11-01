@@ -6,8 +6,8 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
-from viewer.main_window import ViewerWindow  # noqa: E402
-from viewer.session import scan_session  # noqa: E402
+from echo_viewer.window import ViewerWindow  # noqa: E402
+from echo_viewer.session import scan_session  # noqa: E402
 
 
 def test_empty_or_failed_scan_keeps_previous_session(

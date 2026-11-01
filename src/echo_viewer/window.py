@@ -9,12 +9,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from viewer.frames import FrameCache, PrefetchPool
-from viewer.playback import PlaybackController
-from viewer.session import RecordingInfo, Session, recording_label, scan_session
-from viewer.thumbnails import ThumbnailProvider
-from viewer.ui_viewer_window import Ui_ViewerWindow
-from viewer.viewport import RecordingViewport
+from echo_viewer.frames import FrameCache, PrefetchPool
+from echo_viewer.playback import PlaybackController
+from echo_viewer.session import RecordingInfo, Session, recording_label, scan_session
+from echo_viewer.thumbnails import ThumbnailProvider
+from echo_viewer.ui.ui_viewer_window import Ui_ViewerWindow
+from echo_viewer.viewport import RecordingViewport
 
 _GRID_POSITIONS = ((0, 0), (0, 1), (1, 0), (1, 1))
 

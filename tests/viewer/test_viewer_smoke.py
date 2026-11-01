@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.main_window import ViewerWindow  # noqa: E402
+from echo_viewer.window import ViewerWindow  # noqa: E402
 
 
 def test_viewer_window_constructs():

@@ -5,9 +5,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.main_window import ViewerWindow  # noqa: E402
-from viewer.playback import PlaybackController  # noqa: E402
-from viewer.session import scan_session  # noqa: E402
+from echo_viewer.window import ViewerWindow  # noqa: E402
+from echo_viewer.playback import PlaybackController  # noqa: E402
+from echo_viewer.session import scan_session  # noqa: E402
 
 GRID_POSITIONS = ((0, 0), (0, 1), (1, 0), (1, 1))
 

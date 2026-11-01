@@ -528,12 +528,12 @@
   <customwidget>
    <class>ImageView</class>
    <extends>QGraphicsView</extends>
-   <header location="global">imageview.h</header>
+   <header location="global">echo_core.widgets.imageview</header>
   </customwidget>
   <customwidget>
    <class>CrossSectionView</class>
    <extends>QGraphicsView</extends>
-   <header location="global">crosssectionview.h</header>
+   <header location="global">echo_core.widgets.crosssectionview</header>
   </customwidget>
  </customwidgets>
  <resources/>

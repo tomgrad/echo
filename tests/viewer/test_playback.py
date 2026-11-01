@@ -7,7 +7,7 @@ import pytest  # noqa: E402
 from PySide6.QtCore import QObject, Signal  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.playback import PlaybackController, Timeline  # noqa: E402
+from echo_viewer.playback import PlaybackController, Timeline  # noqa: E402
 
 
 class FakeViewport(QObject):

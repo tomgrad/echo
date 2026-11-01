@@ -9,10 +9,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-import dicom_io  # noqa: E402
-from viewer.frames import FrameCache, PrefetchPool, decode_frame, decode_loop  # noqa: E402
-from viewer.session import scan_session  # noqa: E402
-from viewer.viewport import RecordingViewport  # noqa: E402
+from echo_core import dicom_io  # noqa: E402
+from echo_viewer.frames import FrameCache, PrefetchPool, decode_frame, decode_loop  # noqa: E402
+from echo_viewer.session import scan_session  # noqa: E402
+from echo_viewer.viewport import RecordingViewport  # noqa: E402
 
 
 def test_viewport_shows_recording_and_clamps_hold(write_dicom):
@@ -169,7 +169,7 @@ def test_mono_setup_failure_clears_previous_image_and_levels(write_dicom, monkey
     viewport.set_recording(recordings["color.dcm"])
     assert viewport._image.isVisible()
 
-    import viewer.viewport as viewport_module
+    import echo_viewer.viewport as viewport_module
 
     def boom(info, index):
         raise RuntimeError("boom")
@@ -234,7 +234,7 @@ def test_rapid_requests_keep_one_decode_in_flight_and_show_last(write_dicom, mon
     path, arr = write_dicom("mono.dcm", frames=8, color=False)
     info = scan_session(path.parent).recordings[0]
     shown = _record_shown(monkeypatch)
-    import viewer.viewport as viewport_module
+    import echo_viewer.viewport as viewport_module
 
     lock = threading.Lock()
     stats = {"active": 0, "max_active": 0, "calls": 0}

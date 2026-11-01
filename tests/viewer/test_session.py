@@ -1,6 +1,6 @@
 import pytest
 
-from viewer.session import recording_label, scan_session
+from echo_viewer.session import recording_label, scan_session
 
 
 def test_scan_orders_by_instance_and_reads_metadata(write_dicom, tmp_path):

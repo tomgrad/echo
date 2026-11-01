@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import dicom_io
-from viewer.frames import FrameCache, Loop, decode_frame, decode_loop
-from viewer.session import scan_session
+from echo_core import dicom_io
+from echo_viewer.frames import FrameCache, Loop, decode_frame, decode_loop
+from echo_viewer.session import scan_session
 
 
 def _info(write_dicom, **kwargs):

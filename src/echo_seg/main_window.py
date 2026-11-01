@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 import numpy as np
-import dicom_io
+from echo_core import dicom_io
 from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
-from medseg2 import MedSam2Segmenter, configure_torch_for_inference
-from mask_processing import (
+from echo_seg.segmenter import MedSam2Segmenter, configure_torch_for_inference
+from echo_core.masks import (
     build_custom_mask,
     contours_to_jsonable,
     fix_labeled_mask,
@@ -19,7 +19,7 @@ from mask_processing import (
     point_segment_distance_sq,
     sample_outline_curve,
 )
-from ui_mainwindow import Ui_MainWindow
+from echo_seg.ui.ui_mainwindow import Ui_MainWindow
 
 LINE_AXES = {"custom"}  # cross-section modes defined by a line in the image
 FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no limit.
@@ -51,7 +51,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
         super().__init__()
         self.setupUi(self)
-        self.checkpoints_root_dir = Path(__file__).resolve().parent / "checkpoints"
+        self.checkpoints_root_dir = Path(__file__).resolve().parents[2] / "checkpoints"
         self.medsam2_checkpoints_dir = self.checkpoints_root_dir / "MedSAM2"
 
         self.pixel_array = None
@@ -924,7 +924,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             dicom_stem = "dicom"
 
-        output_dir = Path(__file__).resolve().parent / "output"
+        output_dir = Path(__file__).resolve().parents[2] / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{dicom_stem}_mask.npy"
 
@@ -941,7 +941,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             dicom_stem = "dicom"
 
-        output_dir = Path(__file__).resolve().parent / "output"
+        output_dir = Path(__file__).resolve().parents[2] / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{dicom_stem}_contours.json"
 
@@ -1470,11 +1470,3 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.update_cross_section_view()
                 self._sync_cross_section_histogram()
                 self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
-
-
-if __name__ == "__main__":
-    configure_torch_for_inference()
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())

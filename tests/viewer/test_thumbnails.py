@@ -1,7 +1,7 @@
 import numpy as np
 from PySide6.QtGui import QImage
 
-from viewer.thumbnails import qimage_from_frame, thumbnail_qimage
+from echo_viewer.thumbnails import qimage_from_frame, thumbnail_qimage
 
 
 def test_color_qimage_geometry_and_format():
@@ -49,8 +49,8 @@ def _provider_app():
 
 
 def test_cancelled_generation_results_are_dropped(write_dicom, tmp_path):
-    from viewer.session import scan_session
-    from viewer.thumbnails import ThumbnailProvider
+    from echo_viewer.session import scan_session
+    from echo_viewer.thumbnails import ThumbnailProvider
 
     app = _provider_app()
     write_dicom("rec.dcm")
@@ -76,8 +76,8 @@ def test_cancelled_generation_results_are_dropped(write_dicom, tmp_path):
 
 
 def test_request_after_shutdown_is_noop(write_dicom, tmp_path):
-    from viewer.session import scan_session
-    from viewer.thumbnails import ThumbnailProvider
+    from echo_viewer.session import scan_session
+    from echo_viewer.thumbnails import ThumbnailProvider
 
     app = _provider_app()
     write_dicom("rec.dcm")

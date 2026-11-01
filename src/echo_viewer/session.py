@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-import dicom_io
+from echo_core import dicom_io
 
 
 @dataclass(frozen=True)

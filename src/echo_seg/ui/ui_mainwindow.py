@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
     QPushButton, QSizePolicy, QSpacerItem, QSpinBox,
     QSplitter, QStatusBar, QVBoxLayout, QWidget)
 
-from crosssectionview import CrossSectionView
-from imageview import ImageView
+from echo_core.widgets.crosssectionview import CrossSectionView
+from echo_core.widgets.imageview import ImageView
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):

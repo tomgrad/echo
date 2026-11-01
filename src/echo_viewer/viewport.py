@@ -11,10 +11,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-import dicom_io
-from viewer.frames import FrameCache, Loop, decode_frame
-from viewer.playback import Timeline
-from viewer.session import RecordingInfo
+from echo_core import dicom_io
+from echo_viewer.frames import FrameCache, Loop, decode_frame
+from echo_viewer.playback import Timeline
+from echo_viewer.session import RecordingInfo
 
 _OVERLAY_STYLE = "color: #e8e8e8; background: rgba(0, 0, 0, 120); padding: 2px 4px;"
 _ACTIVE_STYLE = 'RecordingViewport[active="true"] { border: 2px solid #5aa9e6; }'

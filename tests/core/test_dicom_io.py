@@ -4,7 +4,7 @@ from pydicom.dataelem import DataElement
 from pydicom.datadict import tag_for_keyword
 from pydicom.dataset import Dataset
 
-import dicom_io
+from echo_core import dicom_io
 
 
 def test_metadata_fallbacks():

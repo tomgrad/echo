@@ -2,7 +2,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from viewer.main_window import ViewerWindow
+from echo_viewer.window import ViewerWindow
 
 
 def main() -> int:

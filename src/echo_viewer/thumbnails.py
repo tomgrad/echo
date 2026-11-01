@@ -2,9 +2,9 @@ import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QImage
 
-import dicom_io
-from viewer.frames import decode_frame
-from viewer.session import RecordingInfo
+from echo_core import dicom_io
+from echo_viewer.frames import decode_frame
+from echo_viewer.session import RecordingInfo
 
 
 def _normalize_mono(frame: np.ndarray, levels) -> np.ndarray:
