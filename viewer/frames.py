@@ -57,10 +57,18 @@ class FrameCache:
 
 
 def decode_loop(info: RecordingInfo) -> Loop:
+    # Decode into one preallocated array, frame by frame, from a single read of
+    # the file. Stacking a list of frames or decoding the full pixel array in
+    # one go roughly doubles peak memory per loop.
     ds = dicom_io.read_dataset(info.path)
-    frames = dicom_io.pixel_frames(ds)
-    if info.is_still:
-        frames = frames[np.newaxis, ...]
+    count = dicom_io.frame_count(ds)
+    first = dicom_io.pixel_frame(ds, 0)
+    frames = np.empty((count, *first.shape), dtype=first.dtype)
+    frames[0] = first
+    del first
+    for index in range(1, count):
+        frames[index] = dicom_io.pixel_frame(ds, index)
+    del ds
     if info.is_color:
         return Loop(frames, None)
     return Loop(frames, dicom_io.mono_levels(frames))
@@ -101,7 +109,7 @@ class PrefetchPool(QObject):
     _raw_ready = Signal(object, object, int)
     _raw_failed = Signal(object, str, int)
 
-    def __init__(self, parent=None, max_workers: int = 4) -> None:
+    def __init__(self, parent=None, max_workers: int = 2) -> None:
         super().__init__(parent)
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(max_workers)

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import dicom_io
 from viewer.frames import FrameCache, Loop, decode_frame, decode_loop
 from viewer.session import scan_session
 
@@ -71,3 +72,22 @@ def test_cache_replaces_same_path():
     assert cache.get(Path("a")) is second
     assert cache.bytes_used == 20
     assert len(cache) == 1
+
+
+def test_decode_loop_matches_stacked_frames_color(write_dicom):
+    info, arr = _info(write_dicom, frames=5, color=True)
+    loop = decode_loop(info)
+    stacked = np.stack([decode_frame(info, i) for i in range(5)])
+    assert loop.frames.dtype == stacked.dtype
+    assert np.array_equal(loop.frames, stacked)
+    assert np.array_equal(loop.frames, arr)
+
+
+def test_decode_loop_matches_stacked_frames_monochrome(write_dicom):
+    info, arr = _info(write_dicom, frames=5, color=False)
+    loop = decode_loop(info)
+    stacked = np.stack([decode_frame(info, i) for i in range(5)])
+    assert loop.frames.dtype == stacked.dtype
+    assert np.array_equal(loop.frames, stacked)
+    assert np.array_equal(loop.frames, arr)
+    assert loop.levels == dicom_io.mono_levels(stacked)
