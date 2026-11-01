@@ -14,6 +14,18 @@
             "type": "shell",
             "command": "pyside6-uic mainwindow.ui -o ui_mainwindow.py",
             "problemMatcher": []
+        },
+        {
+            "label": "designer viewer",
+            "type": "shell",
+            "command": ".venv/bin/pyside6-designer viewer/viewer_window.ui",
+            "problemMatcher": []
+        },
+        {
+            "label": "generate viewer",
+            "type": "shell",
+            "command": ".venv/bin/pyside6-uic viewer/viewer_window.ui -o viewer/ui_viewer_window.py",
+            "problemMatcher": []
         }
     ]
 }
