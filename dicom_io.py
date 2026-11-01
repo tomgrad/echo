@@ -1,5 +1,6 @@
 """Shared DICOM reading helpers used by Echo and the viewer."""
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,7 @@ def _positive_float(value) -> float | None:
         number = float(value)
     except (ValueError, TypeError):
         return None
-    if number > 0:
+    if math.isfinite(number) and number > 0:
         return number
     return None
 
@@ -43,7 +44,9 @@ def fps(ds: pydicom.Dataset) -> float:
         return recommended
     frame_time = _positive_float(ds.get("FrameTime"))
     if frame_time is not None:
-        return 1000.0 / frame_time
+        rate = 1000.0 / frame_time
+        if math.isfinite(rate):
+            return rate
     return DEFAULT_FPS
 
 

@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from pydicom.dataelem import DataElement
+from pydicom.datadict import tag_for_keyword
 from pydicom.dataset import Dataset
 
 import dicom_io
@@ -72,3 +73,32 @@ def test_mono_levels_are_percentiles():
 def test_mono_levels_expand_constant_frames():
     low, high = dicom_io.mono_levels(np.full((2, 4, 4), 7, dtype=np.uint16))
     assert high > low
+
+
+def _raw(ds, keyword, value):
+    # pydicom validates IS/DS assignments and rejects inf/nan; real files can
+    # still carry such strings, so store them with a permissive VR.
+    ds.add(DataElement(tag_for_keyword(keyword), "LO", value))
+
+
+@pytest.mark.parametrize("cine", ["inf", "-inf", "nan", "0", "-5"])
+def test_fps_ignores_non_finite_or_non_positive_cine_rate(cine):
+    ds = Dataset()
+    _raw(ds, "CineRate", cine)
+    ds.FrameTime = 40.0
+    assert dicom_io.fps(ds) == 25.0
+
+
+def test_fps_falls_back_to_default_for_inf_and_nan_sources():
+    ds = Dataset()
+    _raw(ds, "CineRate", "inf")
+    _raw(ds, "RecommendedDisplayFrameRate", "nan")
+    assert dicom_io.fps(ds) == dicom_io.DEFAULT_FPS
+
+
+def test_fps_ignores_frame_time_whose_rate_overflows():
+    ds = Dataset()
+    ds.FrameTime = 5e-324  # 1000 / FrameTime overflows to inf
+    assert dicom_io.fps(ds) == dicom_io.DEFAULT_FPS
+    ds.FrameTime = float("inf")
+    assert dicom_io.fps(ds) == dicom_io.DEFAULT_FPS
