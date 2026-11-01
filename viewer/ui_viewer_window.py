@@ -99,6 +99,14 @@ class Ui_ViewerWindow(object):
 
         self.leftPanelLayout.addWidget(self.sessionLabel)
 
+        self.filterCombo = QComboBox(self.leftPanel)
+        self.filterCombo.addItem("")
+        self.filterCombo.addItem("")
+        self.filterCombo.addItem("")
+        self.filterCombo.setObjectName(u"filterCombo")
+
+        self.leftPanelLayout.addWidget(self.filterCombo)
+
         self.thumbnailList = QListWidget(self.leftPanel)
         self.thumbnailList.setObjectName(u"thumbnailList")
         self.thumbnailList.setViewMode(QListView.ViewMode.IconMode)
@@ -150,5 +158,9 @@ class Ui_ViewerWindow(object):
         self.syncCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Sync", None))
         self.loopCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Loop", None))
         self.sessionLabel.setText(QCoreApplication.translate("ViewerWindow", u"No session", None))
+        self.filterCombo.setItemText(0, QCoreApplication.translate("ViewerWindow", u"All", None))
+        self.filterCombo.setItemText(1, QCoreApplication.translate("ViewerWindow", u"Video only", None))
+        self.filterCombo.setItemText(2, QCoreApplication.translate("ViewerWindow", u"Image only", None))
+
     # retranslateUi
 

@@ -146,6 +146,25 @@
            </widget>
           </item>
           <item>
+           <widget class="QComboBox" name="filterCombo">
+            <item>
+             <property name="text">
+              <string>All</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Video only</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Image only</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
            <widget class="QListWidget" name="thumbnailList">
             <property name="viewMode">
              <enum>QListView::ViewMode::IconMode</enum>
