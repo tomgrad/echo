@@ -66,24 +66,3 @@ def pixel_frame(ds: pydicom.Dataset, index: int) -> np.ndarray:
     if frame_count(ds) == 1:
         return pixel_frames(ds)
     return pixel_array(ds, index=index)
-
-
-def display_array(arr: np.ndarray, color: bool) -> np.ndarray:
-    # ImageView takes (x=col, y=row); swap rows/cols and keep an RGB channel axis last.
-    if color:
-        return np.swapaxes(arr, -3, -2)
-    return np.swapaxes(arr, -2, -1)
-
-
-def mono_levels(frames: np.ndarray) -> tuple[float, float]:
-    if frames.ndim > 2:
-        count = frames.shape[0]
-        idx = np.linspace(0, count - 1, min(16, count)).round().astype(int)
-        sample = frames[idx]
-    else:
-        sample = frames
-    low, high = np.percentile(sample, [1, 99])
-    low, high = float(low), float(high)
-    if high <= low:
-        high = low + 1.0
-    return low, high

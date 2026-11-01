@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from echo_core import dicom_io
+from echo_core.display import display_array, mono_levels
 from echo_viewer.frames import FrameCache, Loop, decode_frame
 from echo_viewer.playback import Timeline
 from echo_viewer.session import RecordingInfo
@@ -143,7 +143,7 @@ class RecordingViewport(QFrame):
         else:
             try:
                 mid = decode_frame(info, info.frames // 2)
-                self.levels = dicom_io.mono_levels(mid)
+                self.levels = mono_levels(mid)
             except Exception as exc:
                 # Drop the previous recording's image and levels so the old
                 # frame is not left visible under the error.
@@ -191,18 +191,12 @@ class RecordingViewport(QFrame):
         self._image.setVisible(True)
         # np.array copies: ImageItem would otherwise keep a view that pins the
         # whole loop array after the cache evicts it.
-        if self.recording.is_color:
-            self._image.setImage(
-                np.array(dicom_io.display_array(frame, True)),
-                autoLevels=False,
-                levels=None,
-            )
-        else:
-            self._image.setImage(
-                np.array(dicom_io.display_array(frame, False)),
-                autoLevels=False,
-                levels=self.levels,
-            )
+        color = self.recording.is_color
+        self._image.setImage(
+            np.array(display_array(frame, color)),
+            autoLevels=False,
+            levels=None if color else self.levels,
+        )
 
     def current_frame_index(self) -> int:
         return self._index

@@ -55,26 +55,6 @@ def test_frame_count_tolerates_bad_values():
     assert dicom_io.frame_count(ds) == 7
 
 
-def test_display_array_swaps_spatial_axes():
-    # Same axes Echo used before the refactor: color swaps -3,-2; mono swaps -2,-1.
-    assert dicom_io.display_array(np.zeros((8, 10)), False).shape == (10, 8)
-    assert dicom_io.display_array(np.zeros((3, 8, 10)), False).shape == (3, 10, 8)
-    assert dicom_io.display_array(np.zeros((8, 10, 3)), True).shape == (10, 8, 3)
-    assert dicom_io.display_array(np.zeros((4, 8, 10, 3)), True).shape == (4, 10, 8, 3)
-
-
-def test_mono_levels_are_percentiles():
-    frames = np.arange(100, dtype=np.uint16).reshape(2, 5, 10)
-    low, high = dicom_io.mono_levels(frames)
-    assert low == pytest.approx(0.99)
-    assert high == pytest.approx(98.01)
-
-
-def test_mono_levels_expand_constant_frames():
-    low, high = dicom_io.mono_levels(np.full((2, 4, 4), 7, dtype=np.uint16))
-    assert high > low
-
-
 def _raw(ds, keyword, value):
     # pydicom validates IS/DS assignments and rejects inf/nan; real files can
     # still carry such strings, so store them with a permissive VR.

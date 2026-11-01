@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from echo_core import dicom_io
+from echo_core.display import mono_levels
 from echo_viewer.frames import FrameCache, Loop, decode_frame, decode_loop
 from echo_viewer.session import scan_session
 
@@ -90,4 +90,4 @@ def test_decode_loop_matches_stacked_frames_monochrome(write_dicom):
     assert loop.frames.dtype == stacked.dtype
     assert np.array_equal(loop.frames, stacked)
     assert np.array_equal(loop.frames, arr)
-    assert loop.levels == dicom_io.mono_levels(stacked)
+    assert loop.levels == mono_levels(stacked)

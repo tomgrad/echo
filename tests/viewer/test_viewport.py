@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from echo_core import dicom_io  # noqa: E402
+from echo_core.display import mono_levels  # noqa: E402
 from echo_viewer.frames import FrameCache, PrefetchPool, decode_frame, decode_loop  # noqa: E402
 from echo_viewer.session import scan_session  # noqa: E402
 from echo_viewer.viewport import RecordingViewport  # noqa: E402
@@ -62,7 +62,7 @@ def test_levels_use_middle_frame_until_loop_arrives_then_loop_levels(write_dicom
     info = scan_session(path.parent).recordings[0]
     viewport = RecordingViewport(FrameCache(budget_bytes=10_000_000))
     viewport.set_recording(info)
-    mid_levels = dicom_io.mono_levels(decode_frame(info, 2))
+    mid_levels = mono_levels(decode_frame(info, 2))
     assert viewport.levels == mid_levels  # pre-prefetch fallback
     loop = decode_loop(info)
     assert loop.levels != mid_levels  # the two level pairs must differ

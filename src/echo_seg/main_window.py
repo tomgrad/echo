@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 from echo_core import dicom_io
+from echo_core.display import display_array
 from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
@@ -1455,8 +1456,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.segmentation_spline_nodes = None
                 self.stop_playback()
                 # ImageView takes (x=col, y=row) axes. Swap rows/cols, keeping an RGB channel axis last.
-                display_array = dicom_io.display_array(self.pixel_array, self.is_color)
-                self.imageView.setImage(display_array)
+                self.imageView.setImage(display_array(self.pixel_array, self.is_color))
                 self.imageView.set_frame_count(self._frame_count())
                 self.imageView.set_mask(None)
                 self.imageView.set_contours([])

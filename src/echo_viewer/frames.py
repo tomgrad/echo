@@ -7,6 +7,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from echo_core import dicom_io
+from echo_core.display import mono_levels
 from echo_viewer.session import RecordingInfo
 
 
@@ -71,7 +72,7 @@ def decode_loop(info: RecordingInfo) -> Loop:
     del ds
     if info.is_color:
         return Loop(frames, None)
-    return Loop(frames, dicom_io.mono_levels(frames))
+    return Loop(frames, mono_levels(frames))
 
 
 def decode_frame(info: RecordingInfo, index: int) -> np.ndarray:
