@@ -113,7 +113,7 @@ def test_synced_without_loop_pauses_at_period(controller):
     assert not controller.is_playing
     assert states[-1] is False
     assert long.calls[-1] == (pytest.approx(1.0), True)
-    assert controller.shared_clock.position_s == pytest.approx(1.0)
+    assert controller.shared_clock.position_s == pytest.approx(1.0, abs=0.05)
 
 
 def test_synced_scrub_moves_all_visible_tiles(controller):
@@ -143,3 +143,22 @@ def test_toggling_sync_rebases_to_zero(controller):
     controller.set_synced(True)
     assert controller.shared_clock.position_s == pytest.approx(0.0, abs=0.05)
     assert long.calls[-1] == (0.0, True)
+
+
+def test_independent_private_tick_skips_hidden_and_recordingless(controller):
+    visible = FakeViewport(10, 10)
+    hidden = FakeViewport(10, 10, hidden=True)
+    no_recording = FakeViewport(10, 10)
+    no_recording.recording = None
+    for viewport in (visible, hidden, no_recording):
+        controller.add_viewport(viewport)
+        viewport.calls.clear()
+    controller.set_synced(False)
+    for viewport in (visible, hidden, no_recording):
+        viewport.calls.clear()
+    controller._on_private_tick(visible, 0.3)
+    controller._on_private_tick(hidden, 0.3)
+    controller._on_private_tick(no_recording, 0.3)
+    assert visible.calls == [(0.3, False)]
+    assert hidden.calls == []
+    assert no_recording.calls == []

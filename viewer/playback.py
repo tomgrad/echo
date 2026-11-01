@@ -96,7 +96,7 @@ class PlaybackController(QObject):
     def add_viewport(self, viewport) -> None:
         clock = PlaybackClock(self)
         clock.position_changed.connect(
-            lambda t, v=viewport: v.show_time(t, hold_at_end=False)
+            lambda t, v=viewport: self._on_private_tick(v, t)
         )
         self._viewports.append(viewport)
         self._clocks.append((viewport, clock))
@@ -185,6 +185,15 @@ class PlaybackController(QObject):
             return
         for viewport in self._visible_viewports():
             viewport.show_time(t, hold_at_end=True)
+
+    def _on_private_tick(self, viewport, t: float) -> None:
+        if (
+            viewport.isHidden()
+            or viewport.recording is None
+            or viewport.timeline is None
+        ):
+            return
+        viewport.show_time(t, hold_at_end=False)
 
     def _visible_viewports(self) -> list:
         return [
