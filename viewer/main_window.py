@@ -43,6 +43,21 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._thumbnails.thumbnail_failed.connect(self._on_thumbnail_failed)
         self.openSessionButton.clicked.connect(self.open_session)
 
+    def closeEvent(self, event):
+        worker = self._scan_worker
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait()
+        self._thumbnails.shutdown()
+        super().closeEvent(event)
+
+    def _on_scan_thread_finished(self) -> None:
+        worker = self._scan_worker
+        if worker is None or not worker.isFinished():
+            return
+        self._scan_worker = None
+        worker.deleteLater()
+
     def open_session(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Open session")
         if not folder:
@@ -52,6 +67,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         worker = ScanWorker(Path(folder), self)
         worker.succeeded.connect(self._on_scan_succeeded)
         worker.failed.connect(self._on_scan_failed)
+        worker.finished.connect(self._on_scan_thread_finished)
         self._scan_worker = worker
         worker.start()
 
@@ -71,6 +87,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
 
     def load_session(self, session: Session) -> None:
         self.session = session
+        self._thumbnails.cancel_all()
         self.thumbnailList.clear()
         self._items_by_path.clear()
         self.sessionLabel.setText(
