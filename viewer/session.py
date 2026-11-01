@@ -64,8 +64,17 @@ def _error_info(path: Path, message: str) -> RecordingInfo:
     )
 
 
+def _heart_rate(ds) -> int | None:
+    if "HeartRate" not in ds:
+        return None
+    try:
+        return int(ds.HeartRate)
+    except (ValueError, TypeError):
+        return None
+
+
 def _info_from_header(path: Path, ds) -> RecordingInfo:
-    heart_rate = int(ds.HeartRate) if "HeartRate" in ds else None
+    heart_rate = _heart_rate(ds)
     return RecordingInfo(
         path=path,
         instance_number=int(ds.get("InstanceNumber", 0) or 0),
@@ -96,13 +105,13 @@ def scan_session(folder: str | Path) -> Session:
             continue
         path = path.resolve()
         try:
-            ds = dicom_io.read_header(path)
+            info = _info_from_header(path, dicom_io.read_header(path))
         except Exception as exc:
             if path.suffix.lower() != ".dcm":
                 continue
             recordings.append(_error_info(path, str(exc) or type(exc).__name__))
             continue
-        recordings.append(_info_from_header(path, ds))
+        recordings.append(info)
 
     recordings.sort(
         key=lambda r: (r.instance_number, r.acquisition_datetime, r.path.name)
