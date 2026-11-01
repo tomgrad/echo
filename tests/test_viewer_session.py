@@ -117,3 +117,16 @@ def test_close_while_scanning_waits_and_releases_worker(
     window.close()
     app.processEvents()
     assert window._scan_worker is None
+
+
+def test_rail_items_reserve_room_for_thumbnail(write_dicom, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    write_dicom("rec.dcm")
+    window = ViewerWindow()
+    window.show()
+    window.load_session(scan_session(tmp_path))
+    app.processEvents()
+    rail = window.thumbnailList
+    assert rail.visualItemRect(rail.item(0)).height() >= rail.iconSize().height()
+    window.close()
+    app.processEvents()

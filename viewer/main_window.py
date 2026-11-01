@@ -157,6 +157,8 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         for i, info in enumerate(session.recordings):
             item = QListWidgetItem(recording_label(info, i + 1))
             item.setData(Qt.ItemDataRole.UserRole, i)
+            # The icon arrives later; without a hint the item is sized from its text alone and clips the thumbnail.
+            item.setSizeHint(self.thumbnailList.gridSize())
             self.thumbnailList.addItem(item)
             self._items_by_path[info.path] = item
             self._thumbnails.request(info)
