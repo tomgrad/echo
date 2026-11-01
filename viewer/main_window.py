@@ -9,9 +9,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from viewer.session import Session, recording_label, scan_session
+from viewer.frames import FrameCache, PrefetchPool
+from viewer.session import RecordingInfo, Session, recording_label, scan_session
 from viewer.thumbnails import ThumbnailProvider
 from viewer.ui_viewer_window import Ui_ViewerWindow
+from viewer.viewport import RecordingViewport
 
 
 class ScanWorker(QThread):
@@ -42,6 +44,21 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._thumbnails.thumbnail_ready.connect(self._on_thumbnail_ready)
         self._thumbnails.thumbnail_failed.connect(self._on_thumbnail_failed)
         self.openSessionButton.clicked.connect(self.open_session)
+        self.cache = FrameCache()
+        self.prefetch = PrefetchPool(self)
+        self.prefetch.loop_ready.connect(self._on_loop_ready)
+        self.prefetch.loop_failed.connect(self._on_loop_failed)
+        self.viewports: list[RecordingViewport] = []
+        for row, col in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            viewport = RecordingViewport(self.cache)
+            viewport.activated.connect(self._set_active)
+            viewport.closed.connect(self._on_viewport_closed)
+            viewport.error.connect(self._on_viewport_error)
+            self.gridLayout.addWidget(viewport, row, col)
+            self.viewports.append(viewport)
+        self.active_viewport = self.viewports[0]
+        self._set_active(self.active_viewport)
+        self.thumbnailList.itemClicked.connect(self._on_thumbnail_clicked)
 
     def closeEvent(self, event):
         worker = self._scan_worker
@@ -49,6 +66,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             worker.requestInterruption()
             worker.wait()
         self._thumbnails.shutdown()
+        self.prefetch.shutdown()
         super().closeEvent(event)
 
     def _on_scan_thread_finished(self) -> None:
@@ -87,6 +105,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
 
     def load_session(self, session: Session) -> None:
         self.session = session
+        self._reset_tiles()
         self._thumbnails.cancel_all()
         self.thumbnailList.clear()
         self._items_by_path.clear()
@@ -113,3 +132,70 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         if not item.text().endswith(" ⚠"):
             item.setText(item.text() + " ⚠")
         item.setToolTip(message)
+
+    def _reset_tiles(self) -> None:
+        for viewport in self.viewports:
+            if viewport.recording is not None:
+                self.prefetch.cancel(viewport.recording)
+            viewport.clear()
+        self.cache.clear()
+
+    def _release(self, viewport: RecordingViewport) -> None:
+        info = viewport.recording
+        if info is None:
+            return
+        for other in self.viewports:
+            if (
+                other is not viewport
+                and other.recording is not None
+                and other.recording.path == info.path
+            ):
+                return
+        self.prefetch.cancel(info)
+
+    def _assign(self, viewport: RecordingViewport, info: RecordingInfo) -> None:
+        self._release(viewport)
+        viewport.set_recording(info)
+        loop = self.cache.get(info.path)
+        if loop is not None:
+            viewport.set_loop(loop)
+        else:
+            self.prefetch.request(info)
+        self._set_active(viewport)
+        self.statusbar.showMessage(f"Showing {info.path.name}")
+
+    def _on_thumbnail_clicked(self, item) -> None:
+        if self.session is None:
+            return
+        info = self.session.recordings[item.data(Qt.ItemDataRole.UserRole)]
+        if info.error is not None:
+            self.statusbar.showMessage(f"Cannot show {info.path.name}: {info.error}")
+            return
+        target = self.active_viewport
+        if target.recording is not None:
+            target = next(
+                (v for v in self.viewports if v.recording is None),
+                self.active_viewport,
+            )
+        self._assign(target, info)
+
+    def _on_loop_ready(self, info: RecordingInfo, loop) -> None:
+        self.cache.put(info.path, loop)
+        for viewport in self.viewports:
+            if viewport.recording is not None and viewport.recording.path == info.path:
+                viewport.set_loop(loop)
+
+    def _on_loop_failed(self, info: RecordingInfo, message: str) -> None:
+        self.statusbar.showMessage(f"Prefetch failed for {info.path.name}: {message}")
+
+    def _on_viewport_error(self, message: str) -> None:
+        self.statusbar.showMessage(f"Decode error: {message}")
+
+    def _on_viewport_closed(self, viewport: RecordingViewport) -> None:
+        self._release(viewport)
+        viewport.clear()
+
+    def _set_active(self, viewport: RecordingViewport) -> None:
+        self.active_viewport = viewport
+        for other in self.viewports:
+            other.set_active(other is viewport)

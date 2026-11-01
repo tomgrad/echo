@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 import dicom_io
 from viewer.session import RecordingInfo
@@ -68,3 +69,86 @@ def decode_loop(info: RecordingInfo) -> Loop:
 def decode_frame(info: RecordingInfo, index: int) -> np.ndarray:
     ds = dicom_io.read_dataset(info.path)
     return dicom_io.pixel_frame(ds, index)
+
+
+class _LoopTask(QRunnable):
+    def __init__(self, pool: "PrefetchPool", info: RecordingInfo, generation: int):
+        super().__init__()
+        self._pool = pool
+        self._info = info
+        self._generation = generation
+
+    def run(self):
+        pool = self._pool
+        path = self._info.path
+        if not pool._is_current(path, self._generation):
+            return
+        try:
+            loop = decode_loop(self._info)
+        except Exception as exc:
+            pool._raw_failed.emit(
+                self._info, str(exc) or type(exc).__name__, self._generation
+            )
+            return
+        pool._raw_ready.emit(self._info, loop, self._generation)
+
+
+class PrefetchPool(QObject):
+    loop_ready = Signal(object, object)  # RecordingInfo, Loop
+    loop_failed = Signal(object, str)
+    # Worker threads emit these; the GUI-thread slots re-check the generation
+    # before forwarding, so results from cancelled requests are dropped.
+    _raw_ready = Signal(object, object, int)
+    _raw_failed = Signal(object, str, int)
+
+    def __init__(self, parent=None, max_workers: int = 4) -> None:
+        super().__init__(parent)
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(max_workers)
+        self._lock = threading.Lock()
+        self._generations: dict[Path, int] = {}
+        self._in_flight: set[Path] = set()
+        self._closed = False
+        self._raw_ready.connect(self._on_raw_ready)
+        self._raw_failed.connect(self._on_raw_failed)
+
+    def request(self, info: RecordingInfo) -> None:
+        path = info.path
+        with self._lock:
+            if self._closed or path in self._in_flight:
+                return
+            self._in_flight.add(path)
+            generation = self._generations.get(path, 0)
+        self._pool.start(_LoopTask(self, info, generation))
+
+    def cancel(self, info: RecordingInfo) -> None:
+        path = info.path
+        with self._lock:
+            self._generations[path] = self._generations.get(path, 0) + 1
+            self._in_flight.discard(path)
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._closed = True
+        self._pool.clear()
+        self._pool.waitForDone()
+
+    def _is_current(self, path: Path, generation: int) -> bool:
+        with self._lock:
+            return not self._closed and self._generations.get(path, 0) == generation
+
+    def _finish(self, info: RecordingInfo, generation: int) -> bool:
+        path = info.path
+        with self._lock:
+            if self._closed or self._generations.get(path, 0) != generation:
+                return False
+            self._in_flight.discard(path)
+            return True
+
+    def _on_raw_ready(self, info, loop, generation: int) -> None:
+        if self._finish(info, generation):
+            self.loop_ready.emit(info, loop)
+
+    def _on_raw_failed(self, info, message: str, generation: int) -> None:
+        if self._finish(info, generation):
+            self.loop_failed.emit(info, message)
