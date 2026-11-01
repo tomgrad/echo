@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 import numpy as np
-import pydicom
+import dicom_io
 from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
@@ -1432,14 +1432,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if selected_files:
                 dicom_file_path = selected_files[0]
                 try:
-                    dicom = pydicom.dcmread(dicom_file_path)
-                    pixel_array = dicom.pixel_array
+                    dicom = dicom_io.read_dataset(dicom_file_path)
+                    pixel_array = dicom_io.pixel_frames(dicom)
                 except Exception as exc:
                     QMessageBox.critical(self, "Load error", f"Could not read DICOM file:\n{exc}")
                     return
                 self.dicom_file_path = dicom_file_path
                 self.dicom_dataset = dicom
-                self.is_color = dicom.get("SamplesPerPixel", 1) > 1
+                self.is_color = dicom_io.is_color(dicom)
                 if FRAMES_LIMIT > 0 and pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
                     pixel_array = pixel_array[:FRAMES_LIMIT]
                 self.pixel_array = pixel_array
@@ -1455,10 +1455,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.segmentation_spline_nodes = None
                 self.stop_playback()
                 # ImageView takes (x=col, y=row) axes. Swap rows/cols, keeping an RGB channel axis last.
-                if self.is_color:
-                    display_array = np.swapaxes(self.pixel_array, -3, -2)
-                else:
-                    display_array = np.swapaxes(self.pixel_array, -2, -1)
+                display_array = dicom_io.display_array(self.pixel_array, self.is_color)
                 self.imageView.setImage(display_array)
                 self.imageView.set_frame_count(self._frame_count())
                 self.imageView.set_mask(None)
