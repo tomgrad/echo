@@ -1,16 +1,17 @@
-import sys
 import xml.etree.ElementTree as ET
-import traceback
 import json
 from pathlib import Path
 from typing import Any
 import numpy as np
 from echo_core import dicom_io
 from echo_core.display import display_array
-from PySide6.QtCore import QStringListModel, QThread, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
+from PySide6.QtCore import QStringListModel, QTimer
+from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
-from echo_seg.segmenter import MedSam2Segmenter, configure_torch_for_inference
+from echo_seg.cross_section import cross_section_contour_points, sample_volume_along_segment
+from echo_seg.keyframes_io import read_keyframes, write_keyframes
+from echo_seg.workers import SegmentationWorker
+from echo_seg.segmenter import MedSam2Segmenter
 from echo_core.masks import (
     build_custom_mask,
     contours_to_jsonable,
@@ -22,29 +23,8 @@ from echo_core.masks import (
 )
 from echo_seg.ui.ui_mainwindow import Ui_MainWindow
 
-LINE_AXES = {"custom"}  # cross-section modes defined by a line in the image
 FRAMES_LIMIT = -1  # Max frames to load from a DICOM (for testing), -1 for no limit.
 MEDSAM2_MODEL_CFG = "configs/sam2.1_hiera_t512.yaml"
-
-
-class SegmentationWorker(QThread):
-    """Runs one segmentation call off the GUI thread and reports back through signals."""
-
-    progress = Signal(int, int, str)
-    succeeded = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, work_fn, parent=None):
-        super().__init__(parent)
-        self._work_fn = work_fn
-
-    def run(self):
-        try:
-            result = self._work_fn(self.progress.emit)
-        except Exception as exc:
-            self.failed.emit(MainWindow._format_segmentation_error(exc, traceback.format_exc()))
-            return
-        self.succeeded.emit(result)
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -187,156 +167,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.imageView.set_line_visible(self._selected_cross_section_axis() == "custom")
         return self.imageView.line_endpoints()
 
-    @staticmethod
-    def _contour_intersections_with_slice(contour, slice_index):
-        pts = np.asarray(contour, dtype=float)
-        if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
-            return []
-
-        c = float(slice_index)
-        intersections = []
-        count = pts.shape[0]
-
-        for i in range(count):
-            x1, y1 = pts[i]
-            x2, y2 = pts[(i + 1) % count]
-
-            # Slice line: x == c; result coordinate is y.
-            if x1 == x2 == c:
-                intersections.extend([float(y1), float(y2)])
-                continue
-            if x1 == x2:
-                continue
-            t = (c - x1) / (x2 - x1)
-            if 0.0 <= t <= 1.0:
-                intersections.append(float(y1 + t * (y2 - y1)))
-
-        if not intersections:
-            return []
-
-        # Deduplicate near-identical points from shared vertices.
-        rounded = np.round(np.asarray(intersections, dtype=float), 3)
-        return np.unique(rounded).astype(float).tolist()
-
-    @staticmethod
-    def _cross2d(a, b):
-        return float(a[0] * b[1] - a[1] * b[0])
-
-    @classmethod
-    def _contour_intersections_with_line_segment(cls, contour, start_xy, end_xy):
-        pts = np.asarray(contour, dtype=float)
-        if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 2:
-            return []
-
-        p0 = np.asarray(start_xy, dtype=float)
-        p1 = np.asarray(end_xy, dtype=float)
-        r = p1 - p0
-        r_norm = float(np.linalg.norm(r))
-        if r_norm < 1e-6:
-            return []
-
-        intersections = []
-        count = pts.shape[0]
-        eps = 1e-6
-
-        for i in range(count):
-            q = pts[i]
-            q2 = pts[(i + 1) % count]
-            s = q2 - q
-            q_minus_p = q - p0
-            r_cross_s = cls._cross2d(r, s)
-
-            if abs(r_cross_s) <= eps:
-                # Collinear edge: include edge endpoints that fall on the sampling line segment.
-                if abs(cls._cross2d(q_minus_p, r)) > 1e-3:
-                    continue
-                for candidate in (q, q2):
-                    t = float(np.dot(candidate - p0, r) / np.dot(r, r))
-                    if 0.0 <= t <= 1.0:
-                        intersections.append(t * r_norm)
-                continue
-
-            t = cls._cross2d(q_minus_p, s) / r_cross_s
-            u = cls._cross2d(q_minus_p, r) / r_cross_s
-            if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
-                intersections.append(t * r_norm)
-
-        if not intersections:
-            return []
-
-        rounded = np.round(np.asarray(intersections, dtype=float), 3)
-        return np.unique(rounded).astype(float).tolist()
-
-    @classmethod
-    def _sample_volume_along_segment(
-        cls,
-        volume: np.ndarray,
-        start_xy: np.ndarray,
-        end_xy: np.ndarray,
-        samples_count: int,
-    ) -> np.ndarray:
-        samples_count = max(2, int(samples_count))
-        x = np.linspace(float(start_xy[0]), float(end_xy[0]), samples_count, dtype=float)
-        y = np.linspace(float(start_xy[1]), float(end_xy[1]), samples_count, dtype=float)
-
-        x0 = np.floor(x).astype(np.int32)
-        y0 = np.floor(y).astype(np.int32)
-        x1 = np.clip(x0 + 1, 0, volume.shape[2] - 1)
-        y1 = np.clip(y0 + 1, 0, volume.shape[1] - 1)
-        x0 = np.clip(x0, 0, volume.shape[2] - 1)
-        y0 = np.clip(y0, 0, volume.shape[1] - 1)
-
-        wx = x - x0
-        wy = y - y0
-
-        v00 = volume[:, y0, x0]
-        v10 = volume[:, y0, x1]
-        v01 = volume[:, y1, x0]
-        v11 = volume[:, y1, x1]
-
-        top = v00 * (1.0 - wx) + v10 * wx
-        bottom = v01 * (1.0 - wx) + v11 * wx
-        return (top * (1.0 - wy) + bottom * wy).T
-
-    def _cross_section_contour_points(
-        self,
-        axis,
-        slice_index,
-        image_size,
-        line_start=None,
-        line_end=None,
-        line_length=None,
-        free_full_size=None,
-        free_clip_offset=0.0,
-    ):
-        if self.segmentation_contours is None:
-            return []
-
-        frame_count = self._frame_count()
-        points = []
-        max_y = float(max(1, image_size))
-
-        for frame_idx in range(frame_count):
-            contours = self.segmentation_contours.get(frame_idx, [])
-            for contour in contours:
-                if axis in LINE_AXES:
-                    values = self._contour_intersections_with_line_segment(contour, line_start, line_end)
-                else:
-                    values = self._contour_intersections_with_slice(contour, slice_index)
-                for value in values:
-                    if axis in LINE_AXES and line_length is not None and line_length > 1e-6:
-                        full_size = max(2, int(free_full_size if free_full_size is not None else image_size))
-                        # Project arc-length along free line into full sampled row coordinates.
-                        value = float(value) * float(full_size - 1) / float(line_length)
-                        # Clip into displayed row coordinates when we crop to frame width.
-                        value = float(value) - float(free_clip_offset)
-                        y = float(np.clip(max_y - value, 0.0, max_y))
-                    else:
-                        # Vertical slice rows are flipped (upside down), so row index maps directly.
-                        y = float(np.clip(value, 0.0, max_y))
-                    points.append((float(frame_idx), y))
-        return points
-
     def _build_vertical_cross_section_slice(self, base_volume: np.ndarray) -> dict[str, Any]:
         _, height, width = base_volume.shape
         slice_index = width // 2
@@ -362,7 +192,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         line_length = float(np.linalg.norm(line_end - line_start))
         full_samples = max(2, int(np.ceil(line_length)) + 1)
         # Keep the whole line: no cropping to the frame width.
-        cross_section = self._sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
+        cross_section = sample_volume_along_segment(base_volume, line_start, line_end, full_samples)
 
         return {
             "slice_index": None,
@@ -394,7 +224,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.hideContoursCheckBox.isChecked():
             contour_points = []
         else:
-            contour_points = self._cross_section_contour_points(
+            contour_points = cross_section_contour_points(
+                self.segmentation_contours,
+                self._frame_count(),
                 axis,
                 ctx["slice_index"],
                 ctx["image_size"],
@@ -833,27 +665,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         )
         if not path:
             return
-        root = ET.Element("keyframes")
-        for frame_idx in self.key_frames:
-            kf_el = ET.SubElement(root, "keyframe", index=str(frame_idx))
-            for obj_id, frame_map in self.key_frame_points.items():
-                for pt in frame_map.get(frame_idx, []):
-                    ET.SubElement(
-                        kf_el, "point",
-                        x=str(pt[0]), y=str(pt[1]),
-                        positive=("true" if pt[2] else "false"),
-                        obj_id=str(obj_id),
-                    )
-            for obj_id, frame_map in self.key_frame_outlines.items():
-                vertices = frame_map.get(frame_idx, [])
-                if not vertices:
-                    continue
-                outline_el = ET.SubElement(kf_el, "outline", obj_id=str(obj_id))
-                for vertex in vertices:
-                    ET.SubElement(outline_el, "vertex", x=str(vertex[0]), y=str(vertex[1]))
-        tree = ET.ElementTree(root)
-        ET.indent(tree, space="  ")
-        tree.write(path, encoding="unicode", xml_declaration=True)
+        write_keyframes(path, self.key_frames, self.key_frame_points, self.key_frame_outlines)
         self.show_status(f"Saved key frames to {path}", 6000)
 
     def load_key_frames(self):
@@ -863,51 +675,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not path:
             return
         try:
-            tree = ET.parse(path)
+            key_frames, key_frame_points, key_frame_outlines = read_keyframes(path, self._frame_count())
         except ET.ParseError as exc:
             QMessageBox.critical(self, "Load error", f"Could not parse file:\n{exc}")
             return
-        # Parse into local containers; replace app state only if the whole file is valid.
-        key_frames = []
-        key_frame_points = {}
-        key_frame_outlines = {}
-        frame_count = self._frame_count()
-        try:
-            root = tree.getroot()
-            if root.tag != "keyframes":
-                raise ValueError("Not a valid key frames file.")
-            for kf_el in root.findall("keyframe"):
-                frame_idx = int(kf_el.get("index"))
-                if frame_count and not 0 <= frame_idx < frame_count:
-                    raise ValueError(f"Key frame {frame_idx} is outside the loaded image ({frame_count} frames).")
-                if frame_idx not in key_frames:
-                    key_frames.append(frame_idx)
-                for outline_el in kf_el.findall("outline"):
-                    obj_id = int(outline_el.get("obj_id"))
-                    vertices = [
-                        [int(vertex_el.get("x")), int(vertex_el.get("y"))]
-                        for vertex_el in outline_el.findall("vertex")
-                    ]
-                    if vertices:
-                        key_frame_outlines.setdefault(obj_id, {})[frame_idx] = vertices
-                for pt_el in kf_el.findall("point"):
-                    x = pt_el.get("x")
-                    y = pt_el.get("y")
-                    positive = pt_el.get("positive")
-                    obj_id = pt_el.get("obj_id")
-                    if x is None or y is None or positive is None or obj_id is None:
-                        raise ValueError(
-                            "Invalid keyframe file: each point must include x, y, positive, and obj_id"
-                        )
-                    key_frame_points.setdefault(int(obj_id), {}).setdefault(frame_idx, []).append([
-                        int(x),
-                        int(y),
-                        positive == "true",
-                    ])
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             QMessageBox.critical(self, "Load error", f"Could not load key frames:\n{exc}")
             return
-        self.key_frames = sorted(key_frames)
+        self.key_frames = key_frames
         self.key_frame_points = key_frame_points
         self.key_frame_outlines = key_frame_outlines
         self._invalidate_segmentation()
@@ -1055,15 +830,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             existing[take_incoming] = obj_id
 
         self.segmentation_mask[frame_slice] = existing
-
-    @staticmethod
-    def _format_segmentation_error(exc, traceback_text=""):
-        base_message = str(exc).strip() or f"{exc.__class__.__name__} (no message)"
-        details = traceback_text.strip()
-        if not details:
-            return base_message
-        # Keep dialog readable and bounded for large backend traces.
-        return f"{base_message}\n\nDetails:\n{details[-4000:]}"
 
     def _run_segmentation(self, start_message, finish_message, segment_fn, on_done,
                           needs_segmenter=True, indeterminate=False):
