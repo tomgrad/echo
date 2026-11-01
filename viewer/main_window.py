@@ -186,6 +186,9 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
                 viewport.set_loop(loop)
 
     def _on_loop_failed(self, info: RecordingInfo, message: str) -> None:
+        for viewport in self.viewports:
+            if viewport.recording is not None and viewport.recording.path == info.path:
+                viewport.mark_prefetch_failed()
         self.statusbar.showMessage(f"Prefetch failed for {info.path.name}: {message}")
 
     def _on_viewport_error(self, message: str) -> None:

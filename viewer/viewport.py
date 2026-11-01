@@ -39,6 +39,8 @@ class RecordingViewport(QFrame):
         self._loop: Loop | None = None
         self._index = 0
         self._failed = False
+        self._error: str | None = None
+        self._prefetch_failed = False
         self.recording: RecordingInfo | None = None
         self.timeline: Timeline | None = None
         self.levels: tuple[float, float] | None = None
@@ -56,7 +58,6 @@ class RecordingViewport(QFrame):
         self._plot.hideAxis("bottom")
         self._image = pg.ImageItem()
         self._plot.addItem(self._image)
-        self._plot.viewport().installEventFilter(self)
 
         self._top_left = _overlay_label(self._plot)
         self._top_right = _overlay_label(self._plot)
@@ -65,6 +66,9 @@ class RecordingViewport(QFrame):
         self._empty.setText("No recording")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet("color: #909090; font-size: 14px;")
+
+        self._plot.viewport().installEventFilter(self)
+        self._plot.installEventFilter(self)
 
         self._slider = QSlider(Qt.Orientation.Horizontal, self)
         self._slider.sliderMoved.connect(self._on_slider_moved)
@@ -91,6 +95,8 @@ class RecordingViewport(QFrame):
         self.timeline = Timeline(frame_count=info.frames, fps=info.fps)
         self._loop = None
         self._failed = False
+        self._error = None
+        self._prefetch_failed = False
         self._index = 0
         self._slider.setRange(0, max(info.frames - 1, 0))
         self._slider.setVisible(not info.is_still and info.frames > 1)
@@ -106,7 +112,6 @@ class RecordingViewport(QFrame):
         self._top_left.show()
         self._top_right.show()
         self._bottom_left.show()
-        self._update_state_text()
         if info.is_color:
             self.levels = None
         else:
@@ -114,9 +119,16 @@ class RecordingViewport(QFrame):
                 mid = decode_frame(info, info.frames // 2)
                 self.levels = dicom_io.mono_levels(mid)
             except Exception as exc:
+                # Drop the previous recording's image and levels so the old
+                # frame is not left visible under the error.
+                self.levels = None
+                self._image.clear()
+                self._image.setVisible(False)
                 self._fail(str(exc) or type(exc).__name__)
+                self._place_overlays()
                 return
         self.show_time(0.0, hold_at_end=False)
+        self._place_overlays()
 
     def set_levels(self, levels: tuple[float, float] | None) -> None:
         self.levels = levels
@@ -125,9 +137,13 @@ class RecordingViewport(QFrame):
 
     def set_loop(self, loop: Loop) -> None:
         self._loop = loop
-        self._update_state_text()
         if self.recording is not None:
             self._show_index(self._index)
+        self._refresh_bottom()
+
+    def mark_prefetch_failed(self) -> None:
+        self._prefetch_failed = True
+        self._refresh_bottom()
 
     def show_time(self, t: float, hold_at_end: bool) -> None:
         if self.recording is None or self.timeline is None:
@@ -163,6 +179,8 @@ class RecordingViewport(QFrame):
         self.timeline = None
         self._loop = None
         self._failed = False
+        self._error = None
+        self._prefetch_failed = False
         self._index = 0
         self.levels = None
         self._image.clear()
@@ -175,6 +193,7 @@ class RecordingViewport(QFrame):
         self._bottom_left.hide()
         self._empty.show()
         self._empty.raise_()
+        self._place_overlays()
 
     def set_active(self, active: bool) -> None:
         self.setProperty("active", "true" if active else "false")
@@ -202,6 +221,8 @@ class RecordingViewport(QFrame):
     def eventFilter(self, obj, event):
         if obj is self._plot.viewport() and event.type() == QEvent.Type.MouseButtonPress:
             self.activated.emit(self)
+        elif obj is self._plot and event.type() == QEvent.Type.Resize:
+            self._place_overlays()
         return super().eventFilter(obj, event)
 
     # ----- internals --------------------------------------------------
@@ -229,22 +250,32 @@ class RecordingViewport(QFrame):
         self._slider.blockSignals(True)
         self._slider.setValue(index)
         self._slider.blockSignals(False)
-        self._counter.setText(f"{index + 1} / {info.frames}")
-        self._update_state_text()
+        self._refresh_bottom()
 
     def _fail(self, message: str) -> None:
         self._failed = True
-        self._counter.setText(f"error: {message}")
+        self._error = message
+        self._refresh_bottom()
         self.error.emit(message)
 
-    def _update_state_text(self) -> None:
+    def _state(self) -> str:
+        assert self.recording is not None
+        if self.recording.is_still:
+            return "STILL"
+        if self._loop is not None or self._cache.get(self.recording.path) is not None:
+            return "LOOP"
+        if self._prefetch_failed:
+            return "ON DEMAND"
+        return "LOADING"
+
+    def _refresh_bottom(self) -> None:
         if self.recording is None:
             return
-        if self.recording.is_still:
-            state = "STILL"
-        elif self._loop is None and self._cache.get(self.recording.path) is None:
-            state = "LOADING"
+        counter = f"{self._index + 1}/{self.recording.frames}"
+        if self._error is not None:
+            self._counter.setText(f"error: {self._error}")
+            self._bottom_left.setText(f"error: {self._error}")
         else:
-            state = "LOOP"
-        self._bottom_left.setText(state)
-        self._bottom_left.adjustSize()
+            self._counter.setText(counter)
+            self._bottom_left.setText(f"{counter} · {self._state()}")
+        self._place_overlays()
