@@ -41,6 +41,19 @@
         </widget>
        </item>
        <item>
+        <widget class="QPushButton" name="thumbnailsButton">
+         <property name="text">
+          <string>Thumbnails</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QComboBox" name="layoutCombo">
          <item>
           <property name="text">

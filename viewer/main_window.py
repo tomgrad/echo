@@ -67,6 +67,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._apply_layout()
         self.thumbnailList.itemClicked.connect(self._on_thumbnail_clicked)
         self.layoutCombo.currentIndexChanged.connect(self._apply_layout)
+        self.thumbnailsButton.toggled.connect(self.leftPanel.setVisible)
         self.playButton.clicked.connect(self._on_play_clicked)
         self.stopButton.clicked.connect(self.controller.restart)
         self.controller.state_changed.connect(self._on_playback_state)
