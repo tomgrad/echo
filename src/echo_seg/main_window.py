@@ -161,8 +161,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.cross_section_volume is None or self.cross_section_volume.ndim != 3:
             return None
         _, height, width = self.cross_section_volume.shape
-        p0 = (0.5 * (width - 1), 0.15 * (height - 1))
-        p1 = (0.5 * (width - 1), 0.85 * (height - 1))
+        p0 = (0.5 * (width - 1), 0.95 * (height - 1))
+        p1 = (0.5 * (width - 1), 0.05 * (height - 1))
         self.imageView.set_line_endpoints(p0, p1)
         self.imageView.set_line_visible(self._selected_cross_section_axis() == "custom")
         return self.imageView.line_endpoints()
