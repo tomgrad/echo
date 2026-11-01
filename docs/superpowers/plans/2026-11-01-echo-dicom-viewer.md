@@ -27,9 +27,13 @@ Each line names an input or failure mode the spec implies, and the task whose te
 
 1. DICOM headers with missing, zero, or non-numeric `CineRate`/`NumberOfFrames`, or no `RecommendedDisplayFrameRate`/`FrameTime` — display must still work with fps 30 and one frame. Pinned in Task 1.
 2. A session folder containing non-DICOM files and a corrupt `.dcm` — scanning must skip the former, surface the latter, and never crash. Pinned in Task 2.
-3. Monochrome 16-bit and single-frame recordings — correct shape, geometry, stable levels, no crash. Pinned in Task 1 (levels), Task 3 (decode), Task 7 (viewport).
+3. Monochrome 16-bit and single-frame recordings — correct shape, geometry, stable levels, no crash. Pinned in Task 1 (levels, display axes for multi-frame mono), Task 3 (mono still decode), Task 7 (viewport, stable levels).
 4. Opening an empty folder, or a scan failing while a session is open — the previous session stays visible and the reason is reported. Pinned in Task 2 (empty scan) and Task 6 (window keeps previous session).
 5. Four loaded 93-frame loops — cache eviction keeps decoded memory bounded and the UI stays responsive. Pinned in Task 3 (eviction) and Task 8 (manual acceptance).
+6. Echo opening a monochrome multi-frame file — the shared display swap must give the same axes as before the refactor. Pinned in Task 1 (`display_array` tests).
+7. Synced-playback logic (longest-visible period, hold at end, loop on/off, hidden tiles, scrub, sync re-base) — pinned in Task 4 with fake viewports.
+8. The same recording shown in two tiles, or a tile reassigned while another tile shows the same recording — prefetch must not be cancelled for the surviving tile. Pinned in Task 7 (`PrefetchPool` tests, assignment rules).
+9. Image rows whose byte width is not a multiple of 4 — pinned in Task 6 (stride test).
 
 ---
 
@@ -52,7 +56,7 @@ Each line names an input or failure mode the spec implies, and the task whose te
   - `is_still(ds: pydicom.Dataset) -> bool`
   - `pixel_frames(ds: pydicom.Dataset) -> np.ndarray`
   - `pixel_frame(ds: pydicom.Dataset, index: int) -> np.ndarray`
-  - `display_array(arr: np.ndarray) -> np.ndarray`
+  - `display_array(arr: np.ndarray, color: bool) -> np.ndarray`
   - `mono_levels(frames: np.ndarray) -> tuple[float, float]`
 
 - [ ] **Step 1: Write the synthetic DICOM fixture**
@@ -191,10 +195,22 @@ def test_monochrome_pixel_frames(write_dicom):
     assert np.array_equal(dicom_io.pixel_frame(ds, 0), arr[0])
 
 
+def test_frame_count_tolerates_bad_values():
+    ds = Dataset()
+    ds.NumberOfFrames = "abc"
+    assert dicom_io.frame_count(ds) == 1
+    ds.NumberOfFrames = "0"
+    assert dicom_io.frame_count(ds) == 1
+    ds.NumberOfFrames = "7"
+    assert dicom_io.frame_count(ds) == 7
+
+
 def test_display_array_swaps_spatial_axes():
-    assert dicom_io.display_array(np.zeros((8, 10))).shape == (10, 8)
-    assert dicom_io.display_array(np.zeros((8, 10, 3))).shape == (10, 8, 3)
-    assert dicom_io.display_array(np.zeros((4, 8, 10, 3))).shape == (4, 10, 8, 3)
+    # Same axes Echo used before the refactor: color swaps -3,-2; mono swaps -2,-1.
+    assert dicom_io.display_array(np.zeros((8, 10)), False).shape == (10, 8)
+    assert dicom_io.display_array(np.zeros((3, 8, 10)), False).shape == (3, 10, 8)
+    assert dicom_io.display_array(np.zeros((8, 10, 3)), True).shape == (10, 8, 3)
+    assert dicom_io.display_array(np.zeros((4, 8, 10, 3)), True).shape == (4, 10, 8, 3)
 
 
 def test_mono_levels_are_percentiles():
@@ -221,7 +237,8 @@ Behavior to implement exactly:
 
 - `read_header`: `pydicom.dcmread(path, stop_before_pixels=True)`.
 - `read_dataset`: `pydicom.dcmread(path)`.
-- `frame_count`: `int(ds.get("NumberOfFrames", 1) or 1)`, minimum 1.
+- `frame_count`: `int(ds.get("NumberOfFrames", 1) or 1)`, minimum 1; a value that
+  cannot be converted (`ValueError`/`TypeError`) returns 1.
 - `fps`: take the first positive number from `CineRate`, `RecommendedDisplayFrameRate`,
   `1000 / FrameTime` (FrameTime is milliseconds), else `DEFAULT_FPS`. Non-numeric
   or non-positive values are skipped, not raised.
@@ -232,17 +249,20 @@ Behavior to implement exactly:
 - `pixel_frame`: `pydicom.pixels.pixel_array(ds, index=index)`; when
   `frame_count(ds) == 1`, return `pixel_frames(ds)` (some decoders only
   accept an index for multi-frame objects).
-- `display_array`: swap the two spatial axes; for 4D arrays swap axes 1 and 2,
-  otherwise axes 0 and 1.
-- `mono_levels`: sample at most 16 evenly spaced frames when the array has a
-  frame axis, then return 1st/99th percentiles as floats; if `high <= low`,
+- `display_array(arr, color)`: swap the two spatial axes exactly as Echo did:
+  `np.swapaxes(arr, -3, -2)` when `color`, else `np.swapaxes(arr, -2, -1)`.
+  The flag is required because a 3D array is `(rows, cols, 3)` for a color
+  frame but `(frames, rows, cols)` for monochrome.
+- `mono_levels`: monochrome only. A 3D array is `(frames, rows, cols)` and a
+  2D array is one frame. Sample at most 16 evenly spaced frames when there is
+  a frame axis, then return 1st/99th percentiles as floats; if `high <= low`,
   set `high = low + 1.0`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_dicom_io.py -v`
 
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 6: Refactor Echo's `open_dicom_file`**
 
@@ -255,11 +275,12 @@ pixel_array = dicom_io.pixel_frames(dicom)
 ...
 self.is_color = dicom_io.is_color(dicom)
 ...
-display_array = dicom_io.display_array(self.pixel_array)
+display_array = dicom_io.display_array(self.pixel_array, self.is_color)
 ```
 
-Delete the old `if self.is_color: ... else: ...` display-array swap block and
-the `FRAMES_LIMIT` slice stays as it is. No other Echo change.
+Delete only the old `if self.is_color: display_array = np.swapaxes(...) else: ...`
+block (the new call replaces it). Leave the `FRAMES_LIMIT` slice untouched.
+No other Echo change.
 
 - [ ] **Step 7: Verify Echo still loads the real file**
 
@@ -273,7 +294,7 @@ import dicom_io
 ds = dicom_io.read_dataset("data/series-00000/image-00000.dcm")
 assert dicom_io.frame_count(ds) == 93
 assert dicom_io.is_color(ds)
-assert dicom_io.display_array(dicom_io.pixel_frame(ds, 0)).shape == (1016, 708, 3)
+assert dicom_io.display_array(dicom_io.pixel_frame(ds, 0), True).shape == (1016, 708, 3)
 print("real DICOM ok")
 EOF
 ```
@@ -523,6 +544,15 @@ def test_decode_still_loop_has_frame_axis(write_dicom):
     assert loop.frames.shape == (1, 8, 10, 3)
 
 
+def test_decode_monochrome_still_has_frame_axis_and_levels(write_dicom):
+    info, arr = _info(write_dicom, frames=1, color=False)
+    loop = decode_loop(info)
+    assert loop.frames.shape == (1, 8, 10)
+    assert np.array_equal(decode_frame(info, 0), arr[0])
+    low, high = loop.levels
+    assert low < high
+
+
 def test_cache_evicts_least_recently_used():
     cache = FrameCache(budget_bytes=120)
     a = Loop(np.zeros(50, dtype=np.uint8), None)
@@ -574,7 +604,7 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.frames'`.
 
 Run: `.venv/bin/python -m pytest tests/test_frames.py -v`
 
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -630,6 +660,8 @@ class PlaybackController(QObject):
     def restart(self) -> None: ...
     def scrub(self, viewport, frame_index: int) -> None: ...
     def show_current(self) -> None: ...
+    def _on_shared_tick(self, t: float) -> None: ...  # connected to shared_clock.position_changed
+    shared_clock: PlaybackClock   # public attribute
     @property
     def synced(self) -> bool: ...
     @property
@@ -643,14 +675,57 @@ Viewport contract consumed by `PlaybackController` (implemented in Task 7):
 `viewport.show_time(t: float, hold_at_end: bool) -> None`,
 `viewport.scrub_requested` signal `(object, int)`, `viewport.isHidden() -> bool`.
 
-- [ ] **Step 1: Write the failing timeline tests**
+- [ ] **Step 1: Write the failing timeline and controller tests**
 
 Create `tests/test_playback.py`:
 
 ```python
-import pytest
+import os
+from types import SimpleNamespace
 
-from viewer.playback import Timeline
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest  # noqa: E402
+from PySide6.QtCore import QObject, Signal  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from viewer.playback import PlaybackController, Timeline  # noqa: E402
+
+
+class FakeViewport(QObject):
+    scrub_requested = Signal(object, int)
+
+    def __init__(self, frames, fps, *, still=False, hidden=False):
+        super().__init__()
+        self.recording = SimpleNamespace(frames=frames, fps=fps, is_still=still)
+        self.timeline = Timeline(frame_count=frames, fps=fps)
+        self.hidden = hidden
+        self.calls = []
+
+    def isHidden(self):
+        return self.hidden
+
+    def show_time(self, t, hold_at_end):
+        self.calls.append((t, hold_at_end))
+
+
+@pytest.fixture
+def controller():
+    QApplication.instance() or QApplication([])
+    ctrl = PlaybackController()
+    yield ctrl
+    ctrl.pause()
+
+
+def _viewports(controller):
+    long = FakeViewport(10, 10)  # 1.0 s
+    short = FakeViewport(5, 10)  # 0.5 s
+    still = FakeViewport(1, 30, still=True)
+    hidden = FakeViewport(20, 10, hidden=True)  # 2.0 s, must not set the period
+    for viewport in (long, short, still, hidden):
+        controller.add_viewport(viewport)
+        viewport.calls.clear()
+    return long, short, still, hidden
 
 
 def test_wraps_at_loop_duration():
@@ -687,6 +762,69 @@ def test_defaults_and_clamping():
 def test_rejects_non_positive_fps():
     with pytest.raises(ValueError):
         Timeline(frame_count=5, fps=0)
+
+
+def test_synced_tick_holds_short_tile_and_skips_hidden(controller):
+    long, short, still, hidden = _viewports(controller)
+    controller.play()
+    controller._on_shared_tick(0.7)
+    assert long.calls[-1] == (0.7, True)
+    assert short.calls[-1] == (0.7, True)  # 0.5 s tile holds its last frame
+    assert still.calls[-1] == (0.7, True)
+    assert hidden.calls == []
+    assert controller.is_playing
+
+
+def test_synced_loop_restarts_at_longest_visible_period(controller):
+    long, short, *_ = _viewports(controller)
+    controller.play()
+    controller._on_shared_tick(1.0)  # hidden 2 s tile is ignored
+    assert controller.shared_clock.position_s == pytest.approx(0.0, abs=0.05)
+    assert long.calls[-1] == (0.0, True)
+    assert short.calls[-1] == (0.0, True)
+    assert controller.is_playing
+
+
+def test_synced_without_loop_pauses_at_period(controller):
+    long, *_ = _viewports(controller)
+    states = []
+    controller.state_changed.connect(states.append)
+    controller.set_loop(False)
+    controller.play()
+    controller._on_shared_tick(1.2)
+    assert not controller.is_playing
+    assert states[-1] is False
+    assert long.calls[-1] == (pytest.approx(1.0), True)
+    assert controller.shared_clock.position_s == pytest.approx(1.0)
+
+
+def test_synced_scrub_moves_all_visible_tiles(controller):
+    long, short, still, hidden = _viewports(controller)
+    controller.scrub(long, 5)
+    assert controller.shared_clock.position_s == pytest.approx(0.5)
+    assert short.calls[-1] == (pytest.approx(0.5), True)
+    assert hidden.calls == []
+
+
+def test_independent_scrub_moves_only_that_tile(controller):
+    long, short, *_ = _viewports(controller)
+    controller.set_synced(False)
+    long.calls.clear()
+    short.calls.clear()
+    controller.scrub(long, 5)
+    assert long.calls[-1] == (pytest.approx(0.5), False)
+    assert short.calls == []
+
+
+def test_toggling_sync_rebases_to_zero(controller):
+    long, short, *_ = _viewports(controller)
+    controller.scrub(long, 5)
+    controller.set_synced(False)
+    assert long.calls[-1] == (0.0, False)
+    assert short.calls[-1] == (0.0, False)
+    controller.set_synced(True)
+    assert controller.shared_clock.position_s == pytest.approx(0.0, abs=0.05)
+    assert long.calls[-1] == (0.0, True)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -719,17 +857,22 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.playback'`.
 
 - [ ] **Step 4: Implement `PlaybackController`**
 
+- The controller starts synced with looping on. It owns a public
+  `self.shared_clock = PlaybackClock(self)` whose `position_changed` is
+  connected to `self._on_shared_tick`.
 - `add_viewport` registers the viewport, creates a private `PlaybackClock`
   for independent mode, connects its `position_changed` to
   `lambda t, v=viewport: v.show_time(t, hold_at_end=False)`, and connects
   `viewport.scrub_requested` to `self.scrub`.
 - `set_synced(True)`: remember playing state, pause, reset the shared clock to
   0, show time 0 on every viewport with `hold_at_end=True`, resume if it was
-  playing. `set_synced(False)`: same but reset each private clock.
-- Shared clock tick: if synced, compute
+  playing. `set_synced(False)`: same but reset each private clock and show
+  time 0 with `hold_at_end=False`.
+- `_on_shared_tick(t)`: if synced, compute
   `period = max(v.timeline.loop_duration_s for visible v with a recording and not v.recording.is_still, default=0)`.
   When `t >= period > 0`: if looping, reset the shared clock to 0 and apply
-  time 0 to all viewports; otherwise pause at `period`. Otherwise call
+  time 0 to all viewports; otherwise set the shared position to `period`,
+  show `period` with `hold_at_end=True` on visible viewports, and pause. Otherwise call
   `v.show_time(t, hold_at_end=True)` for every visible viewport with a
   recording. Hidden viewports are skipped (1×1 layout).
 - `play`: if synced and not looping and the position is at/after the period,
@@ -744,13 +887,14 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.playback'`.
 - `play` and `pause` emit `state_changed(self._playing)` at the end; the
   shared clock tick also emits `state_changed(False)` when it auto-pauses at
   the end with looping disabled.
-- `set_loop` only stores the flag; the tick handles it.
+- `set_loop` only stores the flag; the synced tick handles it. Independent
+  playback always loops each tile; the flag does not apply there.
 
-- [ ] **Step 5: Run timeline tests**
+- [ ] **Step 5: Run playback tests**
 
 Run: `.venv/bin/python -m pytest tests/test_playback.py -v`
 
-Expected: 5 passed.
+Expected: 11 passed (5 timeline, 6 controller).
 
 - [ ] **Step 6: Commit**
 
@@ -769,7 +913,7 @@ git commit -m "feat: add wall-clock playback timeline and controller"
 - Create: `viewer/main_window.py`
 - Create: `viewer/__main__.py`
 - Create: `tests/test_viewer_smoke.py`
-- Modify: `.vscode/tasks.json`, `.zed/tasks.json`
+- Modify: `.vscode/tasks.json` (tracked); `.zed/tasks.json` locally only (`.zed` is gitignored and untracked, so never `git add` it)
 
 **Interfaces:**
 - Produces: `ViewerWindow(QMainWindow, Ui_ViewerWindow)` with these widgets:
@@ -847,7 +991,8 @@ Run: `.venv/bin/pyside6-uic viewer/viewer_window.ui -o viewer/ui_viewer_window.p
 Expected: the file exists and starts with `# -*- coding: utf-8 -*-`; do not
 edit it.
 
-Add two tasks to both `.vscode/tasks.json` and `.zed/tasks.json`:
+Add two tasks to `.vscode/tasks.json` (committed) and to `.zed/tasks.json`
+(local edit, not committed):
 `designer viewer` runs `.venv/bin/pyside6-designer viewer/viewer_window.ui`,
 `generate viewer` runs `.venv/bin/pyside6-uic viewer/viewer_window.ui -o viewer/ui_viewer_window.py`.
 
@@ -903,7 +1048,7 @@ status bar. Close it.
 
 ```bash
 git add viewer/viewer_window.ui viewer/ui_viewer_window.py viewer/main_window.py \
-  viewer/__main__.py tests/test_viewer_smoke.py .vscode/tasks.json .zed/tasks.json
+  viewer/__main__.py tests/test_viewer_smoke.py .vscode/tasks.json
 git commit -m "feat: add viewer window shell and Designer UI"
 ```
 
@@ -914,6 +1059,7 @@ git commit -m "feat: add viewer window shell and Designer UI"
 **Files:**
 - Create: `viewer/thumbnails.py`
 - Create: `tests/test_thumbnails.py`
+- Create: `tests/test_viewer_session.py`
 - Modify: `viewer/main_window.py`
 
 **Interfaces:**
@@ -927,7 +1073,9 @@ git commit -m "feat: add viewer window shell and Designer UI"
     `thumbnail_failed = Signal(object, str)`; `request(info: RecordingInfo) -> None`.
   - `ViewerWindow.open_session() -> None` (button handler),
     `ViewerWindow.load_session(session: Session) -> None`,
-    `ViewerWindow.session: Session | None`, `ViewerWindow._items_by_path`.
+    `ViewerWindow.session: Session | None`, `ViewerWindow._items_by_path`,
+    `ViewerWindow._on_scan_succeeded(session: Session)`,
+    `ViewerWindow._on_scan_failed(message: str)`.
 
 - [ ] **Step 1: Write the failing image-conversion tests**
 
@@ -955,6 +1103,20 @@ def test_mono_qimage_maps_levels_to_full_range():
     assert image.pixelColor(1, 0).red() == 255
 
 
+def test_qimage_respects_row_stride_for_unaligned_widths():
+    # Width 5: 15 bytes per RGB row and 5 per gray row, neither a multiple of 4.
+    color = np.zeros((2, 5, 3), dtype=np.uint8)
+    color[1, 0] = (10, 20, 30)
+    pixel = qimage_from_frame(color, None).pixelColor(0, 1)
+    assert (pixel.red(), pixel.green(), pixel.blue()) == (10, 20, 30)
+
+    mono = np.zeros((2, 5), dtype=np.uint16)
+    mono[1, 0] = 100
+    image = qimage_from_frame(mono, (0.0, 100.0))
+    assert image.pixelColor(0, 1).red() == 255
+    assert image.pixelColor(4, 0).red() == 0
+
+
 def test_thumbnail_scales_to_requested_width():
     image = thumbnail_qimage(np.zeros((100, 200, 3), dtype=np.uint8), None, width=50)
     assert image.width() == 50
@@ -972,8 +1134,11 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.thumbnails'`.
 - `qimage_from_frame`: color frames become `QImage.Format_RGB888`;
   monochrome frames are normalized with `levels` (fall back to the frame's
   min/max, then `high = low + 1` when equal) and become
-  `QImage.Format_Grayscale8`. Always `.copy()` the image so the numpy buffer
-  may be released.
+  `QImage.Format_Grayscale8`. Make the array C-contiguous
+  (`np.ascontiguousarray`) and build the image with an explicit
+  `bytesPerLine` (`width * channels`); QImage otherwise assumes 4-byte-aligned
+  rows and skews images whose row width is not a multiple of 4. Always
+  `.copy()` the image so the numpy buffer may be released.
 - `thumbnail_qimage`: `qimage.scaledToWidth(width, Qt.SmoothTransformation)`.
 - `ThumbnailProvider`: `QThreadPool` with `maxThreadCount = 2`. Each request
   decodes the middle frame (`info.frames // 2`) with `decode_frame`, computes
@@ -992,11 +1157,13 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.thumbnails'`.
   return on empty. Start a `ScanWorker(QThread)` (defined in this module) that
   runs `scan_session(folder)` and emits `succeeded(Session)` or `failed(str)`.
   Disable `openSessionButton` while scanning; show `"Scanning …"` in the
-  status bar.
-- On failure: re-enable the button, `QMessageBox.warning`, and keep the
-  existing session.
-- On success with zero recordings: re-enable, `QMessageBox.information`
-  ("No DICOM recordings found"), keep the existing session.
+  status bar. The worker's `succeeded` connects to `_on_scan_succeeded` and
+  `failed` to `_on_scan_failed`.
+- `_on_scan_failed(message)`: re-enable the button, `QMessageBox.warning`, and
+  keep the existing session.
+- `_on_scan_succeeded(session)` with zero recordings: re-enable,
+  `QMessageBox.information` ("No DICOM recordings found"), keep the existing
+  session. With recordings: re-enable and call `load_session(session)`.
 - `load_session(session)`: store it, clear the rail and
   `_items_by_path`; set `sessionLabel` to
   `f"{session.folder.name} · {len(session.recordings)} recordings"`; for each
@@ -1011,11 +1178,51 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.thumbnails'`.
 - Show `"Loaded N recordings"` when the scan finishes; thumbnail generation
   may continue.
 
-- [ ] **Step 5: Run tests and manual check**
+- [ ] **Step 5: Write the session-keeping test, run tests, manual check**
 
-Run: `.venv/bin/python -m pytest tests/test_thumbnails.py tests/test_viewer_smoke.py -v`
+Create `tests/test_viewer_session.py`:
 
-Expected: 4 passed.
+```python
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+from viewer.main_window import ViewerWindow  # noqa: E402
+from viewer.session import scan_session  # noqa: E402
+
+
+def test_empty_or_failed_scan_keeps_previous_session(
+    write_dicom, tmp_path, monkeypatch
+):
+    app = QApplication.instance() or QApplication([])
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: shown.append("w"))
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append("i"))
+    write_dicom("rec.dcm")
+    window = ViewerWindow()
+    session = scan_session(tmp_path)
+    window.load_session(session)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    window._on_scan_succeeded(scan_session(empty))
+    assert window.session is session
+    assert shown == ["i"]
+
+    window._on_scan_failed("boom")
+    assert window.session is session
+    assert shown == ["i", "w"]
+    assert window.openSessionButton.isEnabled()
+    assert len(window._items_by_path) == 1
+    window.close()
+    app.processEvents()
+```
+
+Run: `.venv/bin/python -m pytest tests/test_thumbnails.py tests/test_viewer_smoke.py tests/test_viewer_session.py -v`
+
+Expected: 6 passed.
 
 Launch `.venv/bin/python -m viewer`, click "Open session", choose
 `data/series-00000`. Expect: rail fills with 48 items labelled
@@ -1026,7 +1233,7 @@ previous session remains.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add viewer/thumbnails.py tests/test_thumbnails.py viewer/main_window.py
+git add viewer/thumbnails.py tests/test_thumbnails.py tests/test_viewer_session.py viewer/main_window.py
 git commit -m "feat: import sessions and show thumbnail rail"
 ```
 
@@ -1080,11 +1287,13 @@ Create `tests/test_viewport.py`:
 ```python
 import os
 
+import time
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from viewer.frames import FrameCache  # noqa: E402
+from viewer.frames import FrameCache, PrefetchPool, decode_loop  # noqa: E402
 from viewer.session import scan_session  # noqa: E402
 from viewer.viewport import RecordingViewport  # noqa: E402
 
@@ -1128,6 +1337,58 @@ def test_monochrome_viewport_computes_levels(write_dicom):
     assert low < high
     viewport.close()
     app.processEvents()
+
+
+def test_levels_stay_fixed_when_loop_arrives(write_dicom):
+    app = QApplication.instance() or QApplication([])
+    path, _ = write_dicom("mono.dcm", frames=4, color=False)
+    info = scan_session(path.parent).recordings[0]
+    viewport = RecordingViewport(FrameCache(budget_bytes=10_000_000))
+    viewport.set_recording(info)
+    before = viewport.levels
+    loop = decode_loop(info)
+    assert loop.levels != before  # percentiles over all frames differ
+    viewport.set_loop(loop)
+    assert viewport.levels == before
+    viewport.close()
+    app.processEvents()
+
+
+def _wait(app, predicate, timeout=5.0):
+    end = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def test_prefetch_ignores_duplicate_request_while_in_flight(write_dicom):
+    app = QApplication.instance() or QApplication([])
+    path, _ = write_dicom("rec.dcm", frames=3, color=True)
+    info = scan_session(path.parent).recordings[0]
+    pool = PrefetchPool()
+    ready = []
+    pool.loop_ready.connect(lambda i, loop: ready.append(i.path))
+    pool.request(info)
+    pool.request(info)
+    _wait(app, lambda: ready)
+    _wait(app, lambda: False, timeout=0.3)  # let any stray second result arrive
+    assert ready == [info.path]
+
+
+def test_prefetch_cancel_drops_in_flight_result(write_dicom):
+    app = QApplication.instance() or QApplication([])
+    path, _ = write_dicom("rec.dcm", frames=3, color=True)
+    info = scan_session(path.parent).recordings[0]
+    pool = PrefetchPool()
+    ready = []
+    pool.loop_ready.connect(lambda i, loop: ready.append(i.path))
+    pool.request(info)
+    pool.cancel(info)
+    _wait(app, lambda: False, timeout=0.5)
+    assert ready == []
+    pool.request(info)  # a fresh request after cancel works again
+    _wait(app, lambda: ready)
+    assert ready == [info.path]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1142,7 +1403,7 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.viewport'`.
   with `QSlider(Qt.Horizontal)`, a frame label, and a `×` close button.
 - Plot setup: `setAspectLocked(True)`, `invertY(True)`,
   `setMouseEnabled(False, False)`, `setMenuEnabled(False)`, hide both axes,
-  no histogram. `ImageItem` displays `display_array(frame)`.
+  no histogram. `ImageItem` displays `display_array(frame, info.is_color)`.
 - Overlay labels parented to the plot, transparent for mouse events:
   top-left patient/study (`patient_name`, `patient_id`, `study_date`),
   top-right recording details (`REC` number is not known here, so instance,
@@ -1154,20 +1415,23 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.viewport'`.
   `Timeline(frame_count=info.frames, fps=info.fps)`; configure slider
   `0..frames-1`; fill labels; set active frame 0 by calling
   `show_time(0.0, hold_at_end=False)`; hide the slider and show `STILL` for
-  single-frame recordings.
+  single-frame recordings. For monochrome recordings, fix `self.levels` once
+  here from `mono_levels(decode_frame(info, info.frames // 2))`; color sets
+  `levels = None`. Levels are never changed afterwards for that recording.
 - `show_time`: stills use frame 0; when `hold_at_end` and
   `t >= timeline.loop_duration_s` use `timeline.loop_end`; otherwise
   `timeline.frame_at(t)`. Then `_show_index(index)`.
 - `_show_index`: read the loop from the cache; on a miss decode
-  `decode_frame(info, index)` synchronously (5–13 ms). Compute levels from
-  `mono_levels(frame)` when monochrome and no loop levels are known. Update
-  the image, slider (block signals), and counter label. On decode failure
+  `decode_frame(info, index)` synchronously (5–13 ms). Use the fixed
+  `self.levels`; never recompute per frame, so brightness does not flicker
+  between on-demand frames and the prefetched loop. Update the image, slider (block signals), and counter label. On decode failure
   set a per-recording failure flag (so the tile stops advancing), emit
   `error(str(exc))`, and show the message in the bottom label; the flag
   resets in `set_recording`.
-- `set_loop`: store the loop, apply `loop.levels`, display the current index.
-- `show_frame`: `ImageItem.setImage(display_array(frame), autoLevels=False,
-  levels=...)`; for color pass `levels=None`.
+- `set_loop`: store the loop, keep the existing `self.levels` (do not adopt
+  `loop.levels`), display the current index.
+- `show_frame`: `ImageItem.setImage(display_array(frame, info.is_color),
+  autoLevels=False, levels=...)`; for color pass `levels=None`.
 - `set_active`: set a dynamic property `active` and repolish the stylesheet
   `RecordingViewport[active="true"] { border: 2px solid #5aa9e6; }`.
 - Mouse press on the plot or overlay emits `activated(self)`; `×` emits
@@ -1176,11 +1440,15 @@ Expected: fails with `ModuleNotFoundError: No module named 'viewer.viewport'`.
 
 - [ ] **Step 4: Add `PrefetchPool` to `viewer/frames.py`**
 
-Use `QThreadPool` with `max_workers`, and one generation counter per path.
-`request` increments the generation and starts a runnable that decodes the
-loop; on completion it emits only if its captured generation is still current.
-`cancel(info)` increments the generation, which makes any in-flight result
-ignored. Emit `loop_ready(info, loop)` or `loop_failed(info, message)`.
+Use `QThreadPool` with `max_workers`, a generation counter per path, and a set
+of in-flight paths. `request` does nothing when the path is already in flight;
+otherwise it adds the path and starts a runnable that decodes the loop with its
+captured generation. On completion the runnable emits only if its generation is
+still current, and the path leaves the in-flight set. `cancel(info)` increments
+the generation and removes the path from the in-flight set, so any running
+result is ignored and a later `request` starts fresh. Emit
+`loop_ready(info, loop)` or `loop_failed(info, message)`. Because delivery is by
+path, the window (not the pool) decides when a cancel is safe.
 
 - [ ] **Step 5: Wire viewports and assignment in `viewer/main_window.py`**
 
@@ -1195,9 +1463,12 @@ ignored. Emit `loop_ready(info, loop)` or `loop_failed(info, message)`.
   the active viewport when that viewport is empty; otherwise use the first
   empty viewport; when all are occupied, replace the active viewport. Make
   the assigned viewport active.
+- `_release(viewport)`: if the viewport has a recording and no other viewport
+  shows the same path, `prefetch.cancel(recording)`. Never cancel a path another
+  tile still shows, so two tiles on one recording both receive the loop.
 - In `load_session`, before repopulating, call `_reset_tiles()`: cancel
-  prefetch for each viewport, `viewport.clear()`, and `cache.clear()`.
-- `_assign(viewport, info)`: cancel prefetch for the previous recording, call
+  prefetch for each viewport's recording, `viewport.clear()`, and `cache.clear()`.
+- `_assign(viewport, info)`: call `_release(viewport)` for the previous recording, call
   `viewport.set_recording(info)`, and place a cached loop if
   `cache.get(info.path)` exists; only otherwise call `prefetch.request(info)`.
   Set active and title/status.
@@ -1205,7 +1476,7 @@ ignored. Emit `loop_ready(info, loop)` or `loop_failed(info, message)`.
   viewport showing that path call `set_loop(loop)`.
 - `_on_loop_failed(info, message)`: status-bar message; leave the tile's
   on-demand display active.
-- `_on_viewport_closed(viewport)`: cancel its prefetch and `viewport.clear()`.
+- `_on_viewport_closed(viewport)`: `_release(viewport)`, then `viewport.clear()`.
 - `_set_active(viewport)`: update `active_viewport` and call `set_active` on
   all viewports.
 
@@ -1213,7 +1484,7 @@ ignored. Emit `loop_ready(info, loop)` or `loop_failed(info, message)`.
 
 Run: `.venv/bin/python -m pytest tests/test_viewport.py tests/test_frames.py -v`
 
-Expected: 9 passed.
+Expected: 13 passed (7 frames, 6 viewport/prefetch).
 
 Launch `.venv/bin/python -m viewer`, open `data/series-00000`, click four
 thumbnails. Expect each to appear in a tile, first frame shown immediately,
