@@ -117,3 +117,44 @@ def test_close_while_scanning_waits_and_releases_worker(
     window.close()
     app.processEvents()
     assert window._scan_worker is None
+
+
+def test_rail_items_reserve_room_for_thumbnail(write_dicom, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    write_dicom("rec.dcm")
+    window = ViewerWindow()
+    window.show()
+    window.load_session(scan_session(tmp_path))
+    app.processEvents()
+    rail = window.thumbnailList
+    assert rail.visualItemRect(rail.item(0)).height() >= rail.iconSize().height()
+    window.close()
+    app.processEvents()
+
+
+def test_filter_combo_shows_all_video_or_image(write_dicom, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    write_dicom("loop.dcm", frames=3, instance=1)
+    write_dicom("still.dcm", frames=1, instance=2)
+    (tmp_path / "bad.dcm").write_text("not a dicom")
+    window = ViewerWindow()
+    window.show()
+    window.load_session(scan_session(tmp_path))
+    rail = window.thumbnailList
+
+    def visible():
+        return sorted(
+            rail.item(i).text().split(" · ")[1]
+            for i in range(rail.count())
+            if not rail.item(i).isHidden()
+        )
+
+    assert len(visible()) == 3
+    window.filterCombo.setCurrentIndex(1)
+    assert visible() == ["inst 1"]
+    window.filterCombo.setCurrentIndex(2)
+    assert visible() == ["inst 2"]
+    window.filterCombo.setCurrentIndex(0)
+    assert len(visible()) == 3
+    window.close()
+    app.processEvents()

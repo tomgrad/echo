@@ -41,6 +41,13 @@ class Ui_ViewerWindow(object):
 
         self.toolbarLayout.addWidget(self.openSessionButton)
 
+        self.thumbnailsButton = QPushButton(self.toolbarFrame)
+        self.thumbnailsButton.setObjectName(u"thumbnailsButton")
+        self.thumbnailsButton.setCheckable(True)
+        self.thumbnailsButton.setChecked(True)
+
+        self.toolbarLayout.addWidget(self.thumbnailsButton)
+
         self.layoutCombo = QComboBox(self.toolbarFrame)
         self.layoutCombo.addItem("")
         self.layoutCombo.addItem("")
@@ -92,6 +99,14 @@ class Ui_ViewerWindow(object):
 
         self.leftPanelLayout.addWidget(self.sessionLabel)
 
+        self.filterCombo = QComboBox(self.leftPanel)
+        self.filterCombo.addItem("")
+        self.filterCombo.addItem("")
+        self.filterCombo.addItem("")
+        self.filterCombo.setObjectName(u"filterCombo")
+
+        self.leftPanelLayout.addWidget(self.filterCombo)
+
         self.thumbnailList = QListWidget(self.leftPanel)
         self.thumbnailList.setObjectName(u"thumbnailList")
         self.thumbnailList.setViewMode(QListView.ViewMode.IconMode)
@@ -134,6 +149,7 @@ class Ui_ViewerWindow(object):
     def retranslateUi(self, ViewerWindow):
         ViewerWindow.setWindowTitle(QCoreApplication.translate("ViewerWindow", u"Echo Viewer", None))
         self.openSessionButton.setText(QCoreApplication.translate("ViewerWindow", u"Open session", None))
+        self.thumbnailsButton.setText(QCoreApplication.translate("ViewerWindow", u"Thumbnails", None))
         self.layoutCombo.setItemText(0, QCoreApplication.translate("ViewerWindow", u"1\u00d71", None))
         self.layoutCombo.setItemText(1, QCoreApplication.translate("ViewerWindow", u"2\u00d72", None))
 
@@ -142,5 +158,9 @@ class Ui_ViewerWindow(object):
         self.syncCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Sync", None))
         self.loopCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Loop", None))
         self.sessionLabel.setText(QCoreApplication.translate("ViewerWindow", u"No session", None))
+        self.filterCombo.setItemText(0, QCoreApplication.translate("ViewerWindow", u"All", None))
+        self.filterCombo.setItemText(1, QCoreApplication.translate("ViewerWindow", u"Video only", None))
+        self.filterCombo.setItemText(2, QCoreApplication.translate("ViewerWindow", u"Image only", None))
+
     # retranslateUi
 

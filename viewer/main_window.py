@@ -67,6 +67,8 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._apply_layout()
         self.thumbnailList.itemClicked.connect(self._on_thumbnail_clicked)
         self.layoutCombo.currentIndexChanged.connect(self._apply_layout)
+        self.thumbnailsButton.toggled.connect(self.leftPanel.setVisible)
+        self.filterCombo.currentIndexChanged.connect(self._apply_filter)
         self.playButton.clicked.connect(self._on_play_clicked)
         self.stopButton.clicked.connect(self.controller.restart)
         self.controller.state_changed.connect(self._on_playback_state)
@@ -157,9 +159,26 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         for i, info in enumerate(session.recordings):
             item = QListWidgetItem(recording_label(info, i + 1))
             item.setData(Qt.ItemDataRole.UserRole, i)
+            # The icon arrives later; without a hint the item is sized from its text alone and clips the thumbnail.
+            item.setSizeHint(self.thumbnailList.gridSize())
             self.thumbnailList.addItem(item)
             self._items_by_path[info.path] = item
             self._thumbnails.request(info)
+        self._apply_filter()
+
+    def _apply_filter(self, *_) -> None:
+        """Show all rail items, only loops (index 1) or only stills (index 2); errors only under All."""
+        mode = self.filterCombo.currentIndex()
+        recordings = self.session.recordings if self.session else ()
+        for i, info in enumerate(recordings):
+            item = self._items_by_path[info.path]
+            if mode == 0:
+                hidden = False
+            elif info.error:
+                hidden = True
+            else:
+                hidden = info.is_still == (mode == 1)
+            item.setHidden(hidden)
 
     def _on_thumbnail_ready(self, path: Path, image) -> None:
         item = self._items_by_path.get(path)
