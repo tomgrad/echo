@@ -4,25 +4,32 @@ Application for echocardiography analysis based on MedSAM2.
 
 ## Setup
 
-- Python 3.14 (`.venv` links to the uv venv).
-- Install with `pip install -e '.[seg]'` (viewer only: `pip install -e .`). CUDA is required; use a CUDA build of PyTorch.
-- Install MedSAM2 (https://github.com/bowang-lab/MedSAM2). Its installed `sam2` package must provide `configs/sam2.1_hiera_t512.yaml`.
+- Python 3.12+ (the project `.venv` links to the uv venv).
+- Install from the repo root:
+  ```bash
+  pip install -e .          # viewer only
+  pip install -e '.[seg]'   # segmentation app (adds opencv, scipy, torch)
+  pip install -e '.[dev]'   # adds pytest
+  ```
+- Segmentation app only: CUDA is required, so use a CUDA build of PyTorch. Install MedSAM2 (https://github.com/bowang-lab/MedSAM2); its `sam2` package must provide `configs/sam2.1_hiera_t512.yaml`.
 - Put MedSAM2 checkpoints (`MedSAM2*.pt`) in `checkpoints/MedSAM2/`. A symlink to the checkpoint directory is fine.
 
 ## Run
 
+Without installing, prefix with `PYTHONPATH=src`.
+
 ```bash
-pip install -e '.[seg]'
-python -m echo_seg      # or: echo-seg
+python -m echo_seg        # segmentation app, or: echo-seg
+python -m echo_viewer     # DICOM viewer, or: echo-viewer
+pytest                    # tests
 ```
 
 ## Viewer
 
-- Run `python -m echo_viewer` (or `echo-viewer`) after `pip install -e .`.
 - Click "Open session" and pick a session folder. Click a thumbnail to fill the active tile; a full tile is replaced by the next click.
 - Play, Stop, Sync and Loop drive all visible tiles. Sync (default) runs them on one clock; Independent runs each at its own fps.
 - The 1×1 / 2×2 selector switches layouts. In 1×1, click a tile to make it the shown one.
-- `src/echo_viewer/ui/viewer_window.ui` is edited in Qt Designer and regenerated with `pyside6-uic src/echo_viewer/ui/viewer_window.ui -o src/echo_viewer/ui/ui_viewer_window.py`. Do not edit `ui_*.py` by hand.
+- `src/echo_viewer/ui/viewer_window.ui` is edited in Qt Designer and regenerated with `pyside6-uic src/echo_viewer/ui/viewer_window.ui -o src/echo_viewer/ui/ui_viewer_window.py`. The segmentation UI works the same way: `pyside6-uic src/echo_seg/ui/mainwindow.ui -o src/echo_seg/ui/ui_mainwindow.py`. Do not edit `ui_*.py` by hand.
 
 ## Layout
 
