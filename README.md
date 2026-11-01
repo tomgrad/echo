@@ -15,6 +15,14 @@ Application for echocardiography analysis based on MedSAM2.
 python main.py
 ```
 
+## Viewer
+
+- Run `python -m viewer` from the repo root.
+- Click "Open session" and pick a session folder. Click a thumbnail to fill the active tile; a full tile is replaced by the next click.
+- Play, Stop, Sync and Loop drive all visible tiles. Sync (default) runs them on one clock; Independent runs each at its own fps.
+- The 1×1 / 2×2 selector switches layouts. In 1×1, click a tile to make it the shown one.
+- `viewer/viewer_window.ui` is edited in Qt Designer and regenerated with `pyside6-uic viewer/viewer_window.ui -o viewer/ui_viewer_window.py`. Do not edit `ui_viewer_window.py` by hand.
+
 ## Data
 
 - Example data lives in `data/` (anonymized DICOM).

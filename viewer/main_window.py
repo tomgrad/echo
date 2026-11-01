@@ -10,10 +10,13 @@ from PySide6.QtWidgets import (
 )
 
 from viewer.frames import FrameCache, PrefetchPool
+from viewer.playback import PlaybackController
 from viewer.session import RecordingInfo, Session, recording_label, scan_session
 from viewer.thumbnails import ThumbnailProvider
 from viewer.ui_viewer_window import Ui_ViewerWindow
 from viewer.viewport import RecordingViewport
+
+_GRID_POSITIONS = ((0, 0), (0, 1), (1, 0), (1, 1))
 
 
 class ScanWorker(QThread):
@@ -49,18 +52,29 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self.prefetch.loop_ready.connect(self._on_loop_ready)
         self.prefetch.loop_failed.connect(self._on_loop_failed)
         self.viewports: list[RecordingViewport] = []
-        for row, col in ((0, 0), (0, 1), (1, 0), (1, 1)):
+        self.controller = PlaybackController(self)
+        for row, col in _GRID_POSITIONS:
             viewport = RecordingViewport(self.cache)
             viewport.activated.connect(self._set_active)
             viewport.closed.connect(self._on_viewport_closed)
             viewport.error.connect(self._on_viewport_error)
             self.gridLayout.addWidget(viewport, row, col)
             self.viewports.append(viewport)
+            # add_viewport also connects viewport.scrub_requested to controller.scrub
+            self.controller.add_viewport(viewport)
         self.active_viewport = self.viewports[0]
         self._set_active(self.active_viewport)
+        self._apply_layout()
         self.thumbnailList.itemClicked.connect(self._on_thumbnail_clicked)
+        self.layoutCombo.currentIndexChanged.connect(self._apply_layout)
+        self.playButton.clicked.connect(self._on_play_clicked)
+        self.stopButton.clicked.connect(self.controller.restart)
+        self.controller.state_changed.connect(self._on_playback_state)
+        self.syncCheckBox.toggled.connect(self._on_sync_toggled)
+        self.loopCheckBox.toggled.connect(self.controller.set_loop)
 
     def closeEvent(self, event):
+        self.controller.pause()
         worker = self._scan_worker
         if worker is not None and worker.isRunning():
             worker.requestInterruption()
@@ -68,6 +82,31 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._thumbnails.shutdown()
         self.prefetch.shutdown()
         super().closeEvent(event)
+
+    def _on_play_clicked(self) -> None:
+        if self.controller.is_playing:
+            self.controller.pause()
+        else:
+            self.controller.play()
+
+    def _on_playback_state(self, playing: bool) -> None:
+        self.playButton.setText("Pause" if playing else "Play")
+
+    def _on_sync_toggled(self, checked: bool) -> None:
+        self.controller.set_synced(checked)
+        self.statusbar.showMessage("Synced" if checked else "Independent")
+
+    def _apply_layout(self, *_) -> None:
+        for viewport in self.viewports:
+            self.gridLayout.removeWidget(viewport)
+            viewport.hide()
+        if self.layoutCombo.currentIndex() == 0:
+            self.gridLayout.addWidget(self.active_viewport, 0, 0)
+            self.active_viewport.show()
+            return
+        for viewport, (row, col) in zip(self.viewports, _GRID_POSITIONS):
+            self.gridLayout.addWidget(viewport, row, col)
+            viewport.show()
 
     def _on_scan_thread_finished(self) -> None:
         worker = self._scan_worker
@@ -162,6 +201,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         else:
             self.prefetch.request(info)
         self._set_active(viewport)
+        self.controller.show_current()
         self.statusbar.showMessage(f"Showing {info.path.name}")
 
     def _on_thumbnail_clicked(self, item) -> None:
@@ -197,8 +237,11 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
     def _on_viewport_closed(self, viewport: RecordingViewport) -> None:
         self._release(viewport)
         viewport.clear()
+        self.controller.show_current()
 
     def _set_active(self, viewport: RecordingViewport) -> None:
         self.active_viewport = viewport
         for other in self.viewports:
             other.set_active(other is viewport)
+        if self.layoutCombo.currentIndex() == 0:
+            self._apply_layout()
