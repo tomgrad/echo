@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 import numpy as np
-from echo_core import dicom_io
+from echo_core import dicom_io, video_io
 from echo_core.display import display_array
 from PySide6.QtCore import QStringListModel, QTimer
 from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox, QProgressBar
@@ -736,8 +736,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         return checkpoint_path
 
     def _ensure_ready_for_segmentation(self):
-        if self.pixel_array is None or self.dicom_dataset is None:
-            self.show_status("Load a DICOM file before segmentation.")
+        if self.pixel_array is None:
+            self.show_status("Load a DICOM or video file before segmentation.")
             return False
         if not self.key_frames:
             self.show_status("Add key frames before segmentation.")
@@ -1193,20 +1193,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def open_dicom_file(self):
         file_dialog = QFileDialog(self)
-        file_dialog.setNameFilter("DICOM files (*)")
+        file_dialog.setNameFilter("DICOM or video files (*)")
         if file_dialog.exec():
             selected_files = file_dialog.selectedFiles()
             if selected_files:
                 dicom_file_path = selected_files[0]
                 try:
-                    dicom = dicom_io.read_dataset(dicom_file_path)
-                    pixel_array = dicom_io.pixel_frames(dicom)
+                    if video_io.is_video(dicom_file_path):
+                        count, rows, cols, _ = video_io.read_meta(dicom_file_path)
+                        pixel_array = video_io.read_frames(dicom_file_path, count, rows, cols)
+                        dicom = None
+                        is_color = True
+                    else:
+                        dicom = dicom_io.read_dataset(dicom_file_path)
+                        pixel_array = dicom_io.pixel_frames(dicom)
+                        is_color = dicom_io.is_color(dicom)
                 except Exception as exc:
-                    QMessageBox.critical(self, "Load error", f"Could not read DICOM file:\n{exc}")
+                    QMessageBox.critical(self, "Load error", f"Could not read file:\n{exc}")
                     return
                 self.dicom_file_path = dicom_file_path
                 self.dicom_dataset = dicom
-                self.is_color = dicom_io.is_color(dicom)
+                self.is_color = is_color
                 if FRAMES_LIMIT > 0 and pixel_array.ndim > 2 and pixel_array.shape[0] > FRAMES_LIMIT:
                     pixel_array = pixel_array[:FRAMES_LIMIT]
                 self.pixel_array = pixel_array
@@ -1235,4 +1242,4 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.refresh_point_overlay()
                 self.update_cross_section_view()
                 self._sync_cross_section_histogram()
-                self.show_status(f"Loaded DICOM: {dicom_file_path}", 6000)
+                self.show_status(f"Loaded: {dicom_file_path}", 6000)

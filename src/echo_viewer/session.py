@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from echo_core import dicom_io
+from echo_core import dicom_io, video_io
 
 
 @dataclass(frozen=True)
@@ -97,6 +97,30 @@ def _info_from_header(path: Path, ds) -> RecordingInfo:
     )
 
 
+def _info_from_video(path: Path) -> RecordingInfo:
+    frames, rows, cols, fps = video_io.read_meta(path)
+    return RecordingInfo(
+        path=path,
+        instance_number=0,
+        sop_instance_uid="",
+        frames=frames,
+        rows=rows,
+        cols=cols,
+        fps=fps,
+        is_color=True,
+        is_still=frames == 1,
+        study_uid="",
+        series_uid="",
+        study_description="",
+        series_description="",
+        patient_name="",
+        patient_id="",
+        study_date="",
+        acquisition_datetime="",
+        heart_rate=None,
+    )
+
+
 def scan_session(folder: str | Path) -> Session:
     root = Path(folder).resolve()
     recordings: list[RecordingInfo] = []
@@ -104,10 +128,14 @@ def scan_session(folder: str | Path) -> Session:
         if path.is_dir():
             continue
         path = path.resolve()
+        is_video = video_io.is_video(path)
         try:
-            info = _info_from_header(path, dicom_io.read_header(path))
+            if is_video:
+                info = _info_from_video(path)
+            else:
+                info = _info_from_header(path, dicom_io.read_header(path))
         except Exception as exc:
-            if path.suffix.lower() != ".dcm":
+            if not is_video and path.suffix.lower() != ".dcm":
                 continue
             recordings.append(_error_info(path, str(exc) or type(exc).__name__))
             continue

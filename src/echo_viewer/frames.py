@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
-from echo_core import dicom_io
+from echo_core import dicom_io, video_io
 from echo_core.display import mono_levels
 from echo_viewer.session import RecordingInfo
 
@@ -61,6 +61,9 @@ def decode_loop(info: RecordingInfo) -> Loop:
     # Decode into one preallocated array, frame by frame, from a single read of
     # the file. Stacking a list of frames or decoding the full pixel array in
     # one go roughly doubles peak memory per loop.
+    if video_io.is_video(info.path):
+        frames = video_io.read_frames(info.path, info.frames, info.rows, info.cols)
+        return Loop(frames, None)
     ds = dicom_io.read_dataset(info.path)
     count = dicom_io.frame_count(ds)
     first = dicom_io.pixel_frame(ds, 0)
@@ -76,6 +79,8 @@ def decode_loop(info: RecordingInfo) -> Loop:
 
 
 def decode_frame(info: RecordingInfo, index: int) -> np.ndarray:
+    if video_io.is_video(info.path):
+        return video_io.read_frame(info.path, index)
     ds = dicom_io.read_dataset(info.path)
     return dicom_io.pixel_frame(ds, index)
 

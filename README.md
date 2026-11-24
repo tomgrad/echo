@@ -26,7 +26,7 @@ pytest                    # tests
 
 ## Viewer
 
-- Click "Open session" and pick a session folder. Click a thumbnail to fill the active tile; a full tile is replaced by the next click.
+- Click "Open session" and pick a session folder. DICOM files and MPEG-4/AVI videos (`.mp4`, `.m4v`, `.mpg`, `.mpeg`, `.avi`) are listed. Click a thumbnail to fill the active tile; a full tile is replaced by the next click.
 - Play, Stop, Sync and Loop drive all visible tiles. Sync (default) runs them on one clock; Independent runs each at its own fps.
 - The 1×1 / 2×2 selector switches layouts. In 1×1, click a tile to make it the shown one.
 - `src/echo_viewer/ui/viewer_window.ui` is edited in Qt Designer and regenerated with `pyside6-uic src/echo_viewer/ui/viewer_window.ui -o src/echo_viewer/ui/ui_viewer_window.py`. The segmentation UI works the same way: `pyside6-uic src/echo_seg/ui/mainwindow.ui -o src/echo_seg/ui/ui_mainwindow.py`. Do not edit `ui_*.py` by hand.
