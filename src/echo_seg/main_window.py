@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 from echo_core import dicom_io, video_io
 from echo_core.display import display_array
+from echo_core.intensity import masked_area, masked_mean_intensity, normalize_minmax
 from PySide6.QtCore import QStringListModel, QTimer
 from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox, QProgressBar
 
@@ -109,6 +110,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.hideNodesCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideframesCheckBox.stateChanged.connect(self._update_overlay_visibility)
         self.hideHistogramCheckBox.stateChanged.connect(self._update_overlay_visibility)
+        self.showIntensityCheckBox.stateChanged.connect(self._update_overlay_visibility)
+        self.showAreaCheckBox.stateChanged.connect(self._update_overlay_visibility)
+        self.grayscaleCheckBox.toggled.connect(self._on_grayscale_toggled)
+        self.staticMaskCheckBox.toggled.connect(self._refresh_intensity)
+        self.keyFramesListView.selectionModel().selectionChanged.connect(
+            self._refresh_intensity
+        )
+        self.grayscaleCheckBox.setEnabled(False)
         self.fpsSpinBox.valueChanged.connect(self._update_play_timer_interval)
         self.lineWidthSpinBox.valueChanged.connect(self._update_contour_width)
         self.imageView.getHistogramWidget().item.sigLevelsChanged.connect(
@@ -215,6 +224,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if base_volume is None or base_volume.ndim != 3:
             self.crossSectionView.clear()
             self.crossSectionView.set_contour_cross_sections([])
+            self.crossSectionView.set_intensity(None)
+            self.crossSectionView.set_area(None)
             return
 
         axis = self._selected_cross_section_axis()
@@ -237,7 +248,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 free_clip_offset=ctx["free_clip_offset"],
             )
         self.crossSectionView.set_contour_cross_sections(contour_points)
+        self.crossSectionView.set_intensity(self._normalized_mask_intensity())
+        self.crossSectionView.set_area(self._normalized_mask_area())
         self._update_cross_section_frame_marker(self.imageView.currentIndex)
+
+    def _normalized_mask_intensity(self):
+        """Per-frame mean intensity of the masked area, min-max normalized.
+
+        With "static mask", the mask of the selected key frame is applied to
+        every frame instead of each frame's own mask.
+        """
+        volume = self.cross_section_volume
+        mask = self.segmentation_mask
+        if volume is None or mask is None or mask.shape != volume.shape:
+            return None
+        if self.staticMaskCheckBox.isChecked():
+            frame = self._selected_key_frame()
+            if frame is None or not 0 <= frame < mask.shape[0]:
+                return None
+            mask = np.broadcast_to(mask[frame], mask.shape)
+        return normalize_minmax(masked_mean_intensity(volume, mask))
+
+    def _normalized_mask_area(self):
+        """Per-frame pixel count of the mask (any label), min-max normalized."""
+        volume = self.cross_section_volume
+        mask = self.segmentation_mask
+        if volume is None or mask is None or mask.shape != volume.shape:
+            return None
+        return normalize_minmax(masked_area(mask))
+
+    def _refresh_intensity(self, *_args):
+        self.crossSectionView.set_intensity(self._normalized_mask_intensity())
 
     def _update_cross_section_frame_marker(self, frame_idx=None):
         if frame_idx is None:
@@ -557,10 +598,29 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.imageView.set_mask_visible(show_masks)
         self.imageView.set_contours_visible(show_contours)
         self.crossSectionView.set_contours_visible(show_contours)
+        self.crossSectionView.set_intensity_visible(self.showIntensityCheckBox.isChecked())
+        self.crossSectionView.set_area_visible(self.showAreaCheckBox.isChecked())
         self.imageView.set_splines_visible(show_splines)
         self.imageView.set_spline_nodes_visible(show_nodes)
         self.imageView.set_frame_visible(show_frames)
         self.imageView.set_histogram_visible(show_histogram)
+
+    def _display_volume(self):
+        """Volume shown in the main view: color, or its gray version when requested."""
+        if self.is_color and self.grayscaleCheckBox.isChecked():
+            gray = np.rint(self.cross_section_volume).astype(self.pixel_array.dtype)
+            return display_array(gray, False)
+        return display_array(self.pixel_array, self.is_color)
+
+    def _on_grayscale_toggled(self, _checked=None):
+        if self.pixel_array is None or not self.is_color:
+            return
+        index = self.imageView.currentIndex
+        self.imageView.setImage(
+            self._display_volume(), autoRange=False, autoHistogramRange=False
+        )
+        self.imageView.setCurrentIndex(index)
+        self._sync_cross_section_histogram()
 
     def _frame_count(self):
         if self.pixel_array is None:
@@ -1200,10 +1260,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 dicom_file_path = selected_files[0]
                 try:
                     if video_io.is_video(dicom_file_path):
-                        count, rows, cols, _ = video_io.read_meta(dicom_file_path)
+                        count, rows, cols, video_fps = video_io.read_meta(dicom_file_path)
                         pixel_array = video_io.read_frames(dicom_file_path, count, rows, cols)
                         dicom = None
                         is_color = True
+                        self.fpsSpinBox.setValue(round(video_fps))
                     else:
                         dicom = dicom_io.read_dataset(dicom_file_path)
                         pixel_array = dicom_io.pixel_frames(dicom)
@@ -1229,7 +1290,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.segmentation_spline_nodes = None
                 self.stop_playback()
                 # ImageView takes (x=col, y=row) axes. Swap rows/cols, keeping an RGB channel axis last.
-                self.imageView.setImage(display_array(self.pixel_array, self.is_color))
+                self.grayscaleCheckBox.setEnabled(self.is_color)
+                self.imageView.setImage(self._display_volume())
                 self.imageView.set_frame_count(self._frame_count())
                 self.imageView.set_mask(None)
                 self.imageView.set_contours([])

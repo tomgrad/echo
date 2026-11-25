@@ -211,6 +211,40 @@
           <item row="7" column="0">
            <widget class="QComboBox" name="crossSectionComboBox"/>
           </item>
+          <item row="9" column="0">
+           <widget class="QCheckBox" name="showAreaCheckBox">
+            <property name="text">
+             <string>show area</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="8" column="1">
+           <widget class="QCheckBox" name="staticMaskCheckBox">
+            <property name="text">
+             <string>static mask</string>
+            </property>
+           </widget>
+          </item>
+          <item row="8" column="0">
+           <widget class="QCheckBox" name="grayscaleCheckBox">
+            <property name="text">
+             <string>grayscale</string>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="1">
+           <widget class="QCheckBox" name="showIntensityCheckBox">
+            <property name="text">
+             <string>show intensity</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>

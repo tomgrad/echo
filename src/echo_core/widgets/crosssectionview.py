@@ -33,6 +33,12 @@ class CrossSectionView(pg.ImageView):
             brush=pg.mkBrush((255, 255, 0, 200)),
             hoverable=False,
         )
+        self._intensity = None
+        self._intensity_visible = True
+        self._intensity_curve = self._make_series_curve((0, 220, 255, 255))
+        self._area = None
+        self._area_visible = True
+        self._area_curve = self._make_series_curve((255, 150, 0, 255))
         self._frame_line.setZValue(100)
         self._cross_section_points.setZValue(90)
         self._frame_line.setVisible(False)
@@ -56,6 +62,8 @@ class CrossSectionView(pg.ImageView):
             self.clear()
             self._frame_line.setVisible(False)
             self._cross_section_points.setData(pos=[])
+            self._intensity_curve.setVisible(False)
+            self._area_curve.setVisible(False)
             return
 
         prev_x_range = None
@@ -97,6 +105,50 @@ class CrossSectionView(pg.ImageView):
             yMax=self._locked_y_range[1],
         )
         self.set_current_frame(self._current_frame)
+        self._render_intensity()
+
+    def _make_series_curve(self, color):
+        curve = pg.PlotDataItem(pen=pg.mkPen(color, width=2), connect='finite')
+        curve.setZValue(95)
+        curve.setVisible(False)
+        self.view.addItem(curve)
+        return curve
+
+    def set_intensity(self, values):
+        """Plot a per-frame series normalized to [0, 1] (NaN = gap) over the image.
+
+        High values are drawn near the top of the view.
+        """
+        self._intensity = None if values is None else np.asarray(values, dtype=float)
+        self._render_series(self._intensity_curve, self._intensity, self._intensity_visible)
+
+    def set_intensity_visible(self, visible):
+        self._intensity_visible = bool(visible)
+        self._render_series(self._intensity_curve, self._intensity, self._intensity_visible)
+
+    def set_area(self, values):
+        """Same as set_intensity, for the normalized mask area series."""
+        self._area = None if values is None else np.asarray(values, dtype=float)
+        self._render_series(self._area_curve, self._area, self._area_visible)
+
+    def set_area_visible(self, visible):
+        self._area_visible = bool(visible)
+        self._render_series(self._area_curve, self._area, self._area_visible)
+
+    def _render_intensity(self):
+        self._render_series(self._intensity_curve, self._intensity, self._intensity_visible)
+        self._render_series(self._area_curve, self._area, self._area_visible)
+
+    def _render_series(self, curve, values, visible):
+        if values is None or self.image is None or len(values) == 0:
+            curve.setData([], [])
+            curve.setVisible(False)
+            return
+        height = self._locked_y_range[1]
+        x = np.arange(len(values), dtype=float)
+        # The view's y axis is inverted, so y = 0 is the top edge.
+        curve.setData(x, height * (1.0 - values))
+        curve.setVisible(visible)
 
     def set_contour_cross_sections(self, points):
         """Display contour cross-section points in cross-section coordinates."""

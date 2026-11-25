@@ -175,6 +175,28 @@ class Ui_MainWindow(object):
 
         self.gridLayout_4.addWidget(self.crossSectionComboBox, 7, 0, 1, 1)
 
+        self.showAreaCheckBox = QCheckBox(self.groupBox_4)
+        self.showAreaCheckBox.setObjectName(u"showAreaCheckBox")
+        self.showAreaCheckBox.setChecked(True)
+
+        self.gridLayout_4.addWidget(self.showAreaCheckBox, 9, 0, 1, 1)
+
+        self.staticMaskCheckBox = QCheckBox(self.groupBox_4)
+        self.staticMaskCheckBox.setObjectName(u"staticMaskCheckBox")
+
+        self.gridLayout_4.addWidget(self.staticMaskCheckBox, 8, 1, 1, 1)
+
+        self.grayscaleCheckBox = QCheckBox(self.groupBox_4)
+        self.grayscaleCheckBox.setObjectName(u"grayscaleCheckBox")
+
+        self.gridLayout_4.addWidget(self.grayscaleCheckBox, 8, 0, 1, 1)
+
+        self.showIntensityCheckBox = QCheckBox(self.groupBox_4)
+        self.showIntensityCheckBox.setObjectName(u"showIntensityCheckBox")
+        self.showIntensityCheckBox.setChecked(True)
+
+        self.gridLayout_4.addWidget(self.showIntensityCheckBox, 7, 1, 1, 1)
+
 
         self.verticalLayout.addWidget(self.groupBox_4)
 
@@ -399,6 +421,10 @@ class Ui_MainWindow(object):
         self.hideHistogramCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide hist", None))
         self.hideSplinesCheckBox.setText(QCoreApplication.translate("MainWindow", u"hide splines", None))
         self.playButton.setText(QCoreApplication.translate("MainWindow", u"Play", None))
+        self.showAreaCheckBox.setText(QCoreApplication.translate("MainWindow", u"show area", None))
+        self.staticMaskCheckBox.setText(QCoreApplication.translate("MainWindow", u"static mask", None))
+        self.grayscaleCheckBox.setText(QCoreApplication.translate("MainWindow", u"grayscale", None))
+        self.showIntensityCheckBox.setText(QCoreApplication.translate("MainWindow", u"show intensity", None))
         self.groupBox_3.setTitle(QCoreApplication.translate("MainWindow", u"Keyframes", None))
 #if QT_CONFIG(tooltip)
         self.addKeyFrameButton.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Add selected frame to keyframes</p></body></html>", None))
