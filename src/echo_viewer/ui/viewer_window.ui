@@ -105,6 +105,16 @@
         </widget>
        </item>
        <item>
+        <widget class="QCheckBox" name="descriptionsCheckBox">
+         <property name="text">
+          <string>Show descriptions</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
         <spacer name="toolbarSpacer">
          <property name="orientation">
           <enum>Qt::Orientation::Horizontal</enum>
@@ -165,6 +175,16 @@
            </widget>
           </item>
           <item>
+           <widget class="QLineEdit" name="descriptionFilterEdit">
+            <property name="placeholderText">
+             <string>Filter by description…</string>
+            </property>
+            <property name="clearButtonEnabled">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QListWidget" name="thumbnailList">
             <property name="viewMode">
              <enum>QListView::ViewMode::IconMode</enum>
@@ -181,7 +201,7 @@
             <property name="gridSize">
              <size>
               <width>200</width>
-              <height>170</height>
+              <height>200</height>
              </size>
             </property>
             <property name="wordWrap">

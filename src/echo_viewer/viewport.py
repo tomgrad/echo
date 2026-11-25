@@ -49,6 +49,7 @@ class _FrameTask(QRunnable):
 class RecordingViewport(QFrame):
     activated = Signal(object)
     closed = Signal(object)
+    edit_requested = Signal(object)
     scrub_requested = Signal(object, int)
     error = Signal(str)
     _frame_decoded = Signal(object)  # worker thread -> GUI thread (queued)
@@ -88,6 +89,7 @@ class RecordingViewport(QFrame):
         self._top_left = _overlay_label(self._plot)
         self._top_right = _overlay_label(self._plot)
         self._bottom_left = _overlay_label(self._plot)
+        self._description = _overlay_label(self._plot)
         self._empty = _overlay_label(self._plot)
         self._empty.setText("No recording")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -156,6 +158,11 @@ class RecordingViewport(QFrame):
         self._show_index(0, sync=True)
         self._place_overlays()
 
+    def set_description(self, text: str, show: bool) -> None:
+        self._description.setText(text)
+        self._description.setVisible(show and bool(text) and self.recording is not None)
+        self._place_overlays()
+
     def set_levels(self, levels: tuple[float, float] | None) -> None:
         self.levels = levels
         if self.recording is not None:
@@ -218,6 +225,7 @@ class RecordingViewport(QFrame):
         self._top_left.hide()
         self._top_right.hide()
         self._bottom_left.hide()
+        self._description.hide()
         self._empty.show()
         self._empty.raise_()
         self._place_overlays()
@@ -238,16 +246,28 @@ class RecordingViewport(QFrame):
         width = self._plot.width()
         height = self._plot.height()
         margin = 8
-        for label in (self._top_left, self._top_right, self._bottom_left):
+        for label in (
+            self._top_left,
+            self._top_right,
+            self._bottom_left,
+            self._description,
+        ):
             label.adjustSize()
         self._top_left.move(margin, margin)
         self._top_right.move(width - self._top_right.width() - margin, margin)
         self._bottom_left.move(margin, height - self._bottom_left.height() - margin)
+        self._description.move((width - self._description.width()) // 2, margin)
         self._empty.setGeometry(0, 0, width, height)
 
     def eventFilter(self, obj, event):
         if obj is self._plot.viewport() and event.type() == QEvent.Type.MouseButtonPress:
             self.activated.emit(self)
+        elif (
+            obj is self._plot.viewport()
+            and event.type() == QEvent.Type.MouseButtonDblClick
+        ):
+            if self.recording is not None:
+                self.edit_requested.emit(self)
         elif obj is self._plot and event.type() == QEvent.Type.Resize:
             self._place_overlays()
         return super().eventFilter(obj, event)

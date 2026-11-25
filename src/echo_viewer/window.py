@@ -1,14 +1,17 @@
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QThread, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
+    QInputDialog,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
 )
 
+from echo_viewer.descriptions import Descriptions
 from echo_viewer.frames import FrameCache, PrefetchPool
 from echo_viewer.playback import PlaybackController
 from echo_viewer.session import RecordingInfo, Session, recording_label, scan_session
@@ -41,6 +44,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         super().__init__(parent)
         self.setupUi(self)
         self.session: Session | None = None
+        self.descriptions: Descriptions | None = None
         self._items_by_path: dict[Path, QListWidgetItem] = {}
         self._scan_worker: ScanWorker | None = None
         self._thumbnails = ThumbnailProvider(self)
@@ -57,6 +61,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             viewport = RecordingViewport(self.cache)
             viewport.activated.connect(self._set_active)
             viewport.closed.connect(self._on_viewport_closed)
+            viewport.edit_requested.connect(self._on_viewport_edit_requested)
             viewport.error.connect(self._on_viewport_error)
             self.gridLayout.addWidget(viewport, row, col)
             self.viewports.append(viewport)
@@ -66,6 +71,12 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self._set_active(self.active_viewport)
         self._apply_layout()
         self.thumbnailList.itemClicked.connect(self._on_thumbnail_clicked)
+        self.thumbnailList.itemDoubleClicked.connect(self._on_thumbnail_double_clicked)
+        self.thumbnailList.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.thumbnailList.customContextMenuRequested.connect(self._on_thumbnail_menu)
+        self.descriptionsCheckBox.toggled.connect(self._refresh_descriptions)
+        self.descriptionFilterEdit.textChanged.connect(self._apply_filter)
+        self.descriptionFilterEdit.installEventFilter(self)
         self.layoutCombo.currentIndexChanged.connect(self._apply_layout)
         self.thumbnailsButton.toggled.connect(self.leftPanel.setVisible)
         self.filterCombo.currentIndexChanged.connect(self._apply_filter)
@@ -74,6 +85,16 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self.controller.state_changed.connect(self._on_playback_state)
         self.syncCheckBox.toggled.connect(self._on_sync_toggled)
         self.loopCheckBox.toggled.connect(self.controller.set_loop)
+
+    def eventFilter(self, obj, event):
+        if (
+            obj is self.descriptionFilterEdit
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            self.descriptionFilterEdit.clear()
+            return True
+        return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
         self.controller.pause()
@@ -142,13 +163,16 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
         self.openSessionButton.setEnabled(True)
         if not session.recordings:
             self.statusbar.clearMessage()
-            QMessageBox.information(self, "Open session", "No DICOM recordings found")
+            QMessageBox.information(self, "Open session", "No DICOM or video recordings found")
             return
         self.load_session(session)
         self.statusbar.showMessage(f"Loaded {len(session.recordings)} recordings")
 
     def load_session(self, session: Session) -> None:
         self.session = session
+        self.descriptions = Descriptions.load(session.folder)
+        if self.descriptions.warning:
+            self.statusbar.showMessage(self.descriptions.warning)
         self._reset_tiles()
         self._thumbnails.cancel_all()
         self.thumbnailList.clear()
@@ -157,7 +181,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             f"{session.folder.name} · {len(session.recordings)} recordings"
         )
         for i, info in enumerate(session.recordings):
-            item = QListWidgetItem(recording_label(info, i + 1))
+            item = QListWidgetItem(self._item_text(info, i))
             item.setData(Qt.ItemDataRole.UserRole, i)
             # The icon arrives later; without a hint the item is sized from its text alone and clips the thumbnail.
             item.setSizeHint(self.thumbnailList.gridSize())
@@ -166,9 +190,77 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             self._thumbnails.request(info)
         self._apply_filter()
 
+    def _item_text(self, info: RecordingInfo, index: int) -> str:
+        text = recording_label(info, index + 1)
+        description = self.descriptions.get(info) if self.descriptions else ""
+        if description and self.descriptionsCheckBox.isChecked():
+            text = description + "\n" + text
+        return text
+
+    def _refresh_descriptions(self, *_) -> None:
+        if self.session is None:
+            return
+        for i, info in enumerate(self.session.recordings):
+            item = self._items_by_path[info.path]
+            warn = item.text().endswith(" ⚠")
+            item.setText(self._item_text(info, i) + (" ⚠" if warn else ""))
+        for viewport in self.viewports:
+            self._push_description(viewport)
+
+    def _push_description(self, viewport: RecordingViewport) -> None:
+        info = viewport.recording
+        text = self.descriptions.get(info) if info and self.descriptions else ""
+        viewport.set_description(text, self.descriptionsCheckBox.isChecked())
+
+    def set_description(self, index: int, text: str) -> None:
+        if self.session is None or self.descriptions is None:
+            return
+        info = self.session.recordings[index]
+        try:
+            self.descriptions.set(info, text)
+        except OSError as exc:
+            self.statusbar.showMessage(f"Cannot save descriptions: {exc}")
+            return
+        self._refresh_descriptions()
+        self._apply_filter()
+
+    def _edit_description(self, item) -> None:
+        if self.session is None or self.descriptions is None:
+            return
+        index = item.data(Qt.ItemDataRole.UserRole)
+        info = self.session.recordings[index]
+        text, ok = QInputDialog.getText(
+            self, "Description", info.path.name, text=self.descriptions.get(info)
+        )
+        if ok:
+            self.set_description(index, text)
+
+    def _on_viewport_edit_requested(self, viewport: RecordingViewport) -> None:
+        info = viewport.recording
+        if info is None or self.session is None:
+            return
+        item = self._items_by_path.get(info.path)
+        if item is not None:
+            self._edit_description(item)
+
+    def _on_thumbnail_double_clicked(self, item) -> None:
+        self._edit_description(item)
+
+    def _on_thumbnail_menu(self, pos) -> None:
+        item = self.thumbnailList.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Edit description…", lambda: self._edit_description(item))
+        menu.exec(self.thumbnailList.viewport().mapToGlobal(pos))
+
     def _apply_filter(self, *_) -> None:
-        """Show all rail items, only loops (index 1) or only stills (index 2); errors only under All."""
+        """Show all rail items, only loops (index 1) or only stills (index 2); errors only under All.
+
+        A non-empty description pattern additionally requires a case-insensitive substring match.
+        """
         mode = self.filterCombo.currentIndex()
+        pattern = self.descriptionFilterEdit.text().strip().casefold()
         recordings = self.session.recordings if self.session else ()
         for i, info in enumerate(recordings):
             item = self._items_by_path[info.path]
@@ -178,6 +270,9 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
                 hidden = True
             else:
                 hidden = info.is_still == (mode == 1)
+            if pattern and not hidden:
+                description = self.descriptions.get(info) if self.descriptions else ""
+                hidden = pattern not in description.casefold()
             item.setHidden(hidden)
 
     def _on_thumbnail_ready(self, path: Path, image) -> None:
@@ -222,6 +317,7 @@ class ViewerWindow(QMainWindow, Ui_ViewerWindow):
             viewport.set_loop(loop)
         else:
             self.prefetch.request(info)
+        self._push_description(viewport)
         self._set_active(viewport)
         self.controller.show_current()
         self.statusbar.showMessage(f"Showing {info.path.name}")

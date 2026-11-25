@@ -16,10 +16,10 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame,
-    QGridLayout, QHBoxLayout, QLabel, QListView,
-    QListWidget, QListWidgetItem, QMainWindow, QPushButton,
-    QSizePolicy, QSpacerItem, QStatusBar, QVBoxLayout,
-    QWidget)
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QListView, QListWidget, QListWidgetItem, QMainWindow,
+    QPushButton, QSizePolicy, QSpacerItem, QStatusBar,
+    QVBoxLayout, QWidget)
 
 class Ui_ViewerWindow(object):
     def setupUi(self, ViewerWindow):
@@ -77,6 +77,12 @@ class Ui_ViewerWindow(object):
 
         self.toolbarLayout.addWidget(self.loopCheckBox)
 
+        self.descriptionsCheckBox = QCheckBox(self.toolbarFrame)
+        self.descriptionsCheckBox.setObjectName(u"descriptionsCheckBox")
+        self.descriptionsCheckBox.setChecked(True)
+
+        self.toolbarLayout.addWidget(self.descriptionsCheckBox)
+
         self.toolbarSpacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.toolbarLayout.addItem(self.toolbarSpacer)
@@ -107,12 +113,18 @@ class Ui_ViewerWindow(object):
 
         self.leftPanelLayout.addWidget(self.filterCombo)
 
+        self.descriptionFilterEdit = QLineEdit(self.leftPanel)
+        self.descriptionFilterEdit.setObjectName(u"descriptionFilterEdit")
+        self.descriptionFilterEdit.setClearButtonEnabled(True)
+
+        self.leftPanelLayout.addWidget(self.descriptionFilterEdit)
+
         self.thumbnailList = QListWidget(self.leftPanel)
         self.thumbnailList.setObjectName(u"thumbnailList")
         self.thumbnailList.setViewMode(QListView.ViewMode.IconMode)
         self.thumbnailList.setResizeMode(QListView.ResizeMode.Adjust)
         self.thumbnailList.setIconSize(QSize(180, 120))
-        self.thumbnailList.setGridSize(QSize(200, 170))
+        self.thumbnailList.setGridSize(QSize(200, 200))
         self.thumbnailList.setWordWrap(True)
         self.thumbnailList.setUniformItemSizes(True)
 
@@ -157,10 +169,12 @@ class Ui_ViewerWindow(object):
         self.stopButton.setText(QCoreApplication.translate("ViewerWindow", u"Stop", None))
         self.syncCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Sync", None))
         self.loopCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Loop", None))
+        self.descriptionsCheckBox.setText(QCoreApplication.translate("ViewerWindow", u"Show descriptions", None))
         self.sessionLabel.setText(QCoreApplication.translate("ViewerWindow", u"No session", None))
         self.filterCombo.setItemText(0, QCoreApplication.translate("ViewerWindow", u"All", None))
         self.filterCombo.setItemText(1, QCoreApplication.translate("ViewerWindow", u"Video only", None))
         self.filterCombo.setItemText(2, QCoreApplication.translate("ViewerWindow", u"Image only", None))
 
+        self.descriptionFilterEdit.setPlaceholderText(QCoreApplication.translate("ViewerWindow", u"Filter by description\u2026", None))
     # retranslateUi
 
